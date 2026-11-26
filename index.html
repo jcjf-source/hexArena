@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hex Arena</title>
+  <meta name="description" content="A browser auto battler: draft units, build synergies and outlast seven bots.">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬢</text></svg>">
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div class="brand">⬢ Hex Arena</div>
+      <div class="round-info">Round <b id="round">0</b> · <span id="phase">—</span> <span id="opponent"></span></div>
+      <div id="timer"></div>
+      <div class="hp">❤️ <b id="hpVal">100</b> <span id="streak"></span></div>
+      <div class="top-actions">
+        <button id="readyBtn" title="Start combat (Space)">Ready ▶</button>
+        <button id="speedBtn" title="Combat speed">1x</button>
+        <button id="helpBtn" title="How to play">?</button>
+      </div>
+    </header>
+
+    <main>
+      <aside id="left">
+        <h3>Synergies</h3>
+        <div id="traits"></div>
+      </aside>
+      <section id="center">
+        <div id="banner"></div>
+        <canvas id="board"></canvas>
+      </section>
+      <aside id="right">
+        <h3>Lobby</h3>
+        <div id="lobby"></div>
+        <h3>Info</h3>
+        <div id="info"><div class="muted">Hover a unit or shop card to see its stats.</div></div>
+      </aside>
+    </main>
+
+    <footer id="shopbar">
+      <div class="shop-side">
+        <div class="levelbox">
+          <div>Level <b id="level">1</b> <span class="cap">Units <b id="unitCap">0/1</b></span></div>
+          <div class="xpbar"><div id="xpFill"></div></div>
+          <div class="xptext" id="xpText"></div>
+        </div>
+        <div class="btnrow">
+          <button id="xpBtn" title="Buy 4 XP (F)">Buy XP<small>4g</small></button>
+          <button id="rerollBtn" title="Reroll shop (D)">Reroll<small>2g</small></button>
+        </div>
+      </div>
+      <div id="shop"></div>
+      <div class="shop-side right">
+        <div class="gold">💰 <b id="goldVal">0</b></div>
+        <button id="lockBtn" title="Lock shop for next round">🔓</button>
+      </div>
+      <div id="sellZone">Drop here to sell</div>
+    </footer>
+  </div>
+
+  <div id="help" class="hidden">
+    <div class="panel">
+      <h2>How to play</h2>
+      <ul>
+        <li><b>Buy</b> units from the shop and <b>drag</b> them from the bench onto your half of the arena (the blue hexes).</li>
+        <li>Your level is the number of units you can field. Buy XP to level up and see pricier units.</li>
+        <li>Collect <b>3 copies</b> of a unit to combine them into a <b>2★</b>; three 2★ make a <b>3★</b>.</li>
+        <li>Units sharing a trait unlock <b>synergies</b> (left panel). Each unique unit counts once.</li>
+        <li>Combat is automatic. Units attack, fill mana, and cast their ability when mana is full.</li>
+        <li>Losing a fight costs HP. The last player standing wins.</li>
+        <li><b>Gold:</b> 5 per round, plus 1 interest per 10 gold held (max 5), plus win/loss streak bonuses.</li>
+        <li>Shortcuts: <kbd>D</kbd> reroll, <kbd>F</kbd> buy XP, <kbd>E</kbd> sell hovered unit, <kbd>Space</kbd> ready, right-click to sell. Drag a unit onto the shop to sell it.</li>
+      </ul>
+      <button id="helpClose" class="primary">Got it</button>
+    </div>
+  </div>
+
+  <div id="overlay" data-mode="start">
+    <div class="panel">
+      <h1>⬢ Hex Arena</h1>
+      <p class="big">Draft a team, build synergies, and outlast seven bots.</p>
+      <p class="muted">Buy units, drag them onto the board, combine three copies to star them up, then watch them fight.</p>
+      <button id="startBtn" class="primary">Start game</button>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

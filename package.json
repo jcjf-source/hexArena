@@ -1,0 +1,11 @@
+{
+  "name": "hex-arena",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A browser auto battler with hex-grid combat. Static site, no build step.",
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve -l 8080 .",
+    "simulate": "node tools/simulate.js 20"
+  }
+}
