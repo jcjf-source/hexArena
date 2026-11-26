@@ -19,7 +19,7 @@ function traitChips(def) {
   return def.traits.map((t) => `<span class="chip">${TRAITS[t].icon} ${TRAITS[t].name}</span>`).join('');
 }
 
-function unitInfoHTML(key, star, live) {
+export function unitInfoHTML(key, star, live) {
   const def = getDef(key);
   const m = [1, 1.8, 3.24][star - 1] * (live?.scale || 1);
   const hp = live ? `${Math.ceil(live.hp)} / ${Math.round(live.maxHp)}` : Math.round(def.hp * m);

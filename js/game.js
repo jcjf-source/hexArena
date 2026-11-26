@@ -32,6 +32,37 @@ function shuffle(a) {
   return a;
 }
 
+// ------------------------------------------------------------ matchmaking helpers
+const BYE = -1; // stands in for "fights a ghost" when the player count is odd
+const pairKey = (i, j) => (i < j ? `${i}:${j}` : `${j}:${i}`);
+
+// Every way to split ids into pairs (105 for 8 players).
+function perfectMatchings(ids) {
+  if (!ids.length) return [[]];
+  const [first, ...rest] = ids;
+  const out = [];
+  rest.forEach((partner, k) => {
+    const remaining = rest.filter((_, x) => x !== k);
+    for (const m of perfectMatchings(remaining)) out.push([[first, partner], ...m]);
+  });
+  return out;
+}
+
+// Can the remaining unmet pairs be split into rounds with no repeats?
+function canFinish(options, met, allPairs, memo) {
+  if (allPairs.every((k) => met.has(k))) return true;
+  const key = [...met].sort().join(',');
+  if (memo.has(key)) return memo.get(key);
+  let ok = false;
+  for (const m of options) {
+    const keys = m.map(([i, j]) => pairKey(i, j));
+    if (keys.some((k) => met.has(k))) continue;
+    if (canFinish(options, new Set([...met, ...keys]), allPairs, memo)) { ok = true; break; }
+  }
+  memo.set(key, ok);
+  return ok;
+}
+
 // ------------------------------------------------------------ pure helpers
 // These work on a plain player object, so clients can use them on snapshots.
 
@@ -109,7 +140,7 @@ function newPlayer(id, name, isHuman) {
     board: emptyBoard(),
     bench: Array(BENCH_SIZE).fill(null),
     shop: [], locked: false, ready: false,
-    streak: 0, alive: true, placement: 0, lastOpp: null,
+    streak: 0, alive: true, placement: 0,
   };
 }
 
@@ -129,6 +160,8 @@ export class Game {
     this.timer = 0;
     this.speed = 1;
     this.matches = [];
+    this.cycleMet = new Set(); // pairKeys already played in the current rotation
+    this.lastMet = {}; // pairKey -> round they last fought
     this.combatClock = 0;
     this.combatDur = 0;
     this.postCombat = 0;
@@ -222,8 +255,20 @@ export class Game {
     return null;
   }
 
+  // Shop cards reserve their unit from the pool, so two players can never both
+  // buy the last copy. Unbought cards go back when the shop is replaced.
   rollShop(p) {
-    p.shop = Array.from({ length: SHOP_SIZE }, () => this.pickFromPool(p.level));
+    this.releaseShop(p);
+    p.shop = Array.from({ length: SHOP_SIZE }, () => {
+      const key = this.pickFromPool(p.level);
+      if (key) this.pool[key]--;
+      return key;
+    });
+  }
+
+  releaseShop(p) {
+    for (const key of p.shop) if (key) this.pool[key]++;
+    p.shop = [];
   }
 
   returnToPool(u) {
@@ -254,8 +299,7 @@ export class Game {
     const key = p.shop[i];
     if (!this.canBuy(p, key)) return false;
     p.gold -= UNITS[key].cost;
-    this.pool[key]--;
-    p.shop[i] = null;
+    p.shop[i] = null; // already taken from the pool when the shop rolled
     const unit = makeInst(key);
     const slot = p.bench.indexOf(null);
     if (slot >= 0) p.bench[slot] = unit;
@@ -385,26 +429,76 @@ export class Game {
     return boardUnits(p).map((b) => ({ unit: { key: b.unit.key, star: b.unit.star }, x: b.x, y: b.y }));
   }
 
+  // Fair rotation: everyone faces every remaining opponent once before any
+  // repeat. With an odd count, the ghost fight (BYE) is one more opponent.
   makeMatches() {
     const alive = this.alivePlayers();
     if (isPveRound(this.round)) return alive.map((p) => ({ a: p, b: null, pve: true }));
-    let list = shuffle(alive.slice());
-    for (let tries = 0; tries < 12; tries++) {
-      let ok = true;
-      for (let i = 0; i + 1 < list.length; i += 2) {
-        if (list[i].lastOpp === list[i + 1].id && alive.length > 2) ok = false;
-      }
-      if (ok) break;
-      list = shuffle(list);
-    }
+    const pairs = this.pickPairs(alive.map((p) => p.id));
     const out = [];
-    for (let i = 0; i + 1 < list.length; i += 2) out.push({ a: list[i], b: list[i + 1] });
-    if (list.length % 2) {
-      const lone = list[list.length - 1];
-      const others = alive.filter((p) => p !== lone);
-      out.push({ a: lone, b: others[rand(others.length)], ghost: true });
+    for (const [i, j] of pairs) {
+      if (i === BYE || j === BYE) {
+        const lone = this.players[i === BYE ? j : i];
+        const others = alive.filter((p) => p !== lone);
+        out.push({ a: lone, b: others[rand(others.length)], ghost: true });
+      } else {
+        // Random side so neither player is always the mirrored one.
+        const [a, b] = Math.random() < 0.5 ? [i, j] : [j, i];
+        out.push({ a: this.players[a], b: this.players[b] });
+      }
     }
     return out;
+  }
+
+  // Chooses this round's pairs and records them in the rotation.
+  pickPairs(ids) {
+    const pairs = this.choosePairs(ids);
+    for (const [i, j] of pairs) {
+      this.cycleMet.add(pairKey(i, j));
+      this.lastMet[pairKey(i, j)] = this.round;
+    }
+    return pairs;
+  }
+
+  choosePairs(ids) {
+    const verts = ids.length % 2 ? [...ids, BYE] : ids.slice();
+    const allPairs = [];
+    for (let x = 0; x < verts.length; x++) {
+      for (let y = x + 1; y < verts.length; y++) allPairs.push(pairKey(verts[x], verts[y]));
+    }
+    // Drop pairs involving eliminated players; start a new cycle once everyone has met.
+    const live = new Set(allPairs);
+    for (const k of this.cycleMet) if (!live.has(k)) this.cycleMet.delete(k);
+    if (allPairs.every((k) => this.cycleMet.has(k))) this.cycleMet.clear();
+
+    const options = shuffle(perfectMatchings(verts));
+    const met = this.cycleMet;
+    const repeats = (m) => m.filter(([i, j]) => met.has(pairKey(i, j))).length;
+    const staleness = (m) => m.reduce((s, [i, j]) => s + (this.lastMet[pairKey(i, j)] || 0), 0);
+
+    // Fresh matchings that still leave a way to finish the cycle without repeats.
+    const fresh = options.filter((m) => !repeats(m));
+    if (fresh.length) {
+      const unmetDeg = new Map(verts.map((v) => [v, 0]));
+      for (const k of allPairs) {
+        if (met.has(k)) continue;
+        const [i, j] = k.split(':').map(Number);
+        unmetDeg.set(i, unmetDeg.get(i) + 1);
+        unmetDeg.set(j, unmetDeg.get(j) + 1);
+      }
+      // A full no-repeat finish only exists when every player has the same number of
+      // opponents left; after an elimination that's often false, so skip the lookahead.
+      const regular = new Set(unmetDeg.values()).size === 1;
+      if (regular) {
+        const memo = new Map();
+        const ok = fresh.find((m) => canFinish(options, new Set([...met, ...m.map(([i, j]) => pairKey(i, j))]), allPairs, memo));
+        if (ok) return ok;
+      }
+      return fresh[0];
+    }
+    // Otherwise fewest repeats, then the opponents met longest ago.
+    options.sort((a, b) => (repeats(a) - repeats(b)) || (staleness(a) - staleness(b)));
+    return options[0];
   }
 
   // The match a player watches: the one they fight in (not one where they are only a ghost).
@@ -482,7 +576,6 @@ export class Game {
       const results = [[m.a, 'A', 'B']];
       if (!m.ghost) results.push([m.b, 'B', 'A']);
       for (const [p, mine, theirs] of results) {
-        p.lastOpp = (p === m.a ? m.b : m.a).id;
         if (w === mine) {
           p.gold += 1;
           p.streak = p.streak > 0 ? p.streak + 1 : 1;
@@ -503,6 +596,7 @@ export class Game {
       p.alive = false;
       p.placement = place--;
       for (const l of allUnits(p)) this.returnToPool(l.unit);
+      this.releaseShop(p);
       p.board = emptyBoard();
       p.bench = Array(BENCH_SIZE).fill(null);
     }
