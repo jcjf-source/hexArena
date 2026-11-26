@@ -89,12 +89,38 @@ aside h3:not(:first-child) { margin-top: 14px; }
 .trait.active.t0 { border-color: #b07a4a; }
 .trait.active.t1 { border-color: #c8d3e0; }
 .trait.active.t2 { border-color: var(--gold); box-shadow: 0 0 8px #ffcf4a44; }
+.trait { align-items: flex-start; cursor: help; }
+.trait:hover { border-color: var(--accent); }
 .ticon { font-family: var(--emoji); font-size: 18px; }
-.tmain { flex: 1; }
+.tmain { flex: 1; min-width: 0; }
+.thead { display: flex; justify-content: space-between; align-items: baseline; }
 .tname { font-weight: 600; }
 .tbp { font-size: 11px; color: var(--muted); }
 .tbp .cur { color: #fff; font-weight: 700; }
+.tnext { margin-left: 4px; color: var(--muted); font-style: italic; }
+.tnext.max { color: var(--gold); font-style: normal; }
 .tcount { font-weight: 800; font-size: 16px; }
+.tdesc { font-size: 11.5px; line-height: 1.35; color: #c8d3e3; margin-top: 3px; }
+.tdesc b { color: var(--gold); }
+.trait:not(.active) .tdesc b { color: inherit; }
+
+/* The synergy list scrolls within the board's height instead of stretching the page. */
+#left { contain: size; align-self: stretch; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+#info { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+
+/* trait details in the info panel */
+.tiers { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.tier { display: flex; gap: 6px; align-items: baseline; padding: 2px 4px; border-radius: 4px; }
+.tier.met { color: var(--text); }
+.tier.cur { background: #ffcf4a1a; }
+.tier b { color: var(--gold); }
+.tier-n { min-width: 16px; text-align: center; font-weight: 800; background: #0006; border-radius: 4px; }
+.tunits { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 8px; }
+.tunit { font-size: 11px; border: 1px solid; border-radius: 4px; padding: 0 4px; opacity: .55; white-space: nowrap; }
+.tunit.owned { opacity: 1; background: #ffffff14; }
+.tref { font-size: 13px; line-height: 1.4; text-align: left; margin-bottom: 5px; }
+.tref .ticon { font-size: 15px; margin-right: 4px; }
+.tref b { color: var(--text); }
 
 /* lobby */
 .lp { display: grid; grid-template-columns: 1fr 30px; grid-template-rows: auto 6px; gap: 2px 6px; padding: 5px 6px; border-radius: 6px; margin-bottom: 3px; }
@@ -186,6 +212,7 @@ body.dragging #sellZone { display: flex; }
 .panel {
   background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px 32px;
   max-width: 560px; text-align: center; box-shadow: 0 20px 60px #0009;
+  max-height: calc(100vh - 32px); overflow-y: auto;
 }
 .panel h1 { margin: 0 0 10px; font-size: 34px; color: var(--accent); }
 .panel h2 { margin-top: 0; }
@@ -219,10 +246,11 @@ kbd { background: #0008; border: 1px solid var(--line); border-radius: 4px; padd
 /* ---------- responsive ---------- */
 @media (max-width: 1050px) {
   main { grid-template-columns: 1fr; }
+  #left { contain: none; overflow: visible; }
   #center { order: -1; }
   aside { display: grid; grid-template-columns: 1fr; }
   #traits { display: flex; flex-wrap: wrap; gap: 5px; }
-  #traits .trait { margin: 0; }
+  #traits .trait { margin: 0; flex: 1 1 220px; }
 }
 @media (max-width: 760px) {
   #app { padding: 6px; }

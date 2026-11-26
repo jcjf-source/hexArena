@@ -1,7 +1,7 @@
 // DOM UI: top bar, shop, synergies, lobby, unit info, and input handling.
 // Reads the player's snapshot (session.view) and sends actions (session.act).
 
-import { UNITS, TRAITS, COST_COLORS, XP_TO_LEVEL, MAX_LEVEL, fillTemplate, traitDesc } from './data.js';
+import { UNITS, TRAITS, COST_COLORS, XP_TO_LEVEL, MAX_LEVEL, fillTemplate } from './data.js';
 import { countTraits, traitTier, getDef } from './combat.js';
 import {
   sellValue, REROLL_COST, XP_COST, getAt, boardUnits, boardCount, allUnits, canBuy,
@@ -42,6 +42,32 @@ export function unitInfoHTML(key, star, live) {
       <div>🛡️ Armor <b>${armor}</b></div><div>🔮 MR <b>${mr}</b></div>
       <div>🎯 Range <b>${def.range}</b></div>
     </div>${ab}`;
+}
+
+// Trait effect sentence with every tier's value, the active one in bold: "+<b>20</b>/45%".
+function traitEffect(key, tier) {
+  const t = TRAITS[key];
+  const vals = t.values.map((v, i) => (i === tier ? `<b>${v}</b>` : v)).join('/');
+  return t.desc.replace('{v}', vals);
+}
+
+// Info panel content for a trait: every tier, and every unit that has it.
+function traitInfoHTML(key, count, ownedKeys) {
+  const t = TRAITS[key];
+  const tier = traitTier(key, count);
+  const tiers = t.breakpoints.map((b, i) => `
+    <div class="tier ${i === tier ? 'cur' : ''} ${count >= b ? 'met' : ''}">
+      <span class="tier-n">${b}</span><span>${t.desc.replace('{v}', `<b>${t.values[i]}</b>`)}</span></div>`).join('');
+  const units = Object.keys(UNITS).filter((k) => UNITS[k].traits.includes(key))
+    .sort((a, b) => UNITS[a].cost - UNITS[b].cost)
+    .map((k) => `<span class="tunit ${ownedKeys.has(k) ? 'owned' : ''}" style="border-color:${COST_COLORS[UNITS[k].cost]}"
+      title="${UNITS[k].name} (${UNITS[k].cost}g)">${UNITS[k].icon} ${UNITS[k].name}</span>`).join('');
+  const status = count ? `${count} unique on your board` : 'None on your board';
+  return `
+    <div class="info-head"><span class="info-icon">${t.icon}</span>
+      <div><div class="info-name">${t.name}</div><div class="muted">${status}</div></div></div>
+    <div class="tiers">${tiers}</div>
+    <div class="tunits">${units}</div>`;
 }
 
 export class UI {
@@ -100,6 +126,18 @@ export class UI {
       const key = this.v.me.shop[Number(card.dataset.i)];
       if (key) this.showInfo(unitInfoHTML(key, 1));
     });
+    $('traits').addEventListener('mouseover', (e) => {
+      const row = e.target.closest('.trait');
+      if (!row || !this.v) return;
+      const board = boardUnits(this.v.me).map((b) => b.unit);
+      const owned = new Set(allUnits(this.v.me).map((l) => l.unit.key));
+      this.showInfo(traitInfoHTML(row.dataset.trait, countTraits(board)[row.dataset.trait] || 0, owned));
+    });
+    $('traitRef').innerHTML = Object.keys(TRAITS).map((k) => {
+      const t = TRAITS[k];
+      return `<div class="tref"><span class="ticon">${t.icon}</span><b>${t.name}</b>
+        <span class="muted">(${t.breakpoints.join(' / ')})</span> ${traitEffect(k, -1)}</div>`;
+    }).join('');
     $('helpBtn').onclick = () => $('help').classList.toggle('hidden');
     $('helpClose').onclick = () => $('help').classList.add('hidden');
 
@@ -285,11 +323,16 @@ export class UI {
     $('traits').innerHTML = rows.length ? rows.map(({ k, c, tier }) => {
       const t = TRAITS[k];
       const bps = t.breakpoints.map((b, i) => `<span class="${i === tier ? 'cur' : ''}">${b}</span>`).join(' › ');
-      return `<div class="trait ${tier >= 0 ? `active t${tier}` : ''}" title="${traitDesc(k)}">
+      const next = t.breakpoints.find((b) => b > c);
+      const need = next ? `<span class="tnext">${next - c} more for ${next}</span>` : '<span class="tnext max">max</span>';
+      return `<div class="trait ${tier >= 0 ? `active t${tier}` : ''}" data-trait="${k}">
         <span class="ticon">${t.icon}</span>
-        <div class="tmain"><div class="tname">${t.name}</div><div class="tbp">${bps}</div></div>
-        <span class="tcount">${c}</span></div>`;
-    }).join('') : '<div class="muted">Place units on the board to activate synergies.</div>';
+        <div class="tmain">
+          <div class="thead"><span class="tname">${t.name}</span><span class="tcount">${c}</span></div>
+          <div class="tbp">${bps} ${need}</div>
+          <div class="tdesc">${traitEffect(k, tier)}</div>
+        </div></div>`;
+    }).join('') : '<div class="muted">Place units on the board to activate synergies. Hover one to see what it does.</div>';
   }
 
   renderLobby() {

@@ -59,6 +59,8 @@ function syncReplay(v, dt) {
 }
 
 const params = new URLSearchParams(location.search);
+// ?debug exposes the session for console poking and automated screenshots.
+if (params.has('debug')) window.hexArena = { get session() { return session; } };
 if (params.has('autostart')) menu.solo();
 else menu.showMain(null, normalizeCode(params.get('join')));
 
