@@ -68,4 +68,15 @@ tools/simulate.js   headless bot-only games for balance checks
 tools/nettest.js    headless multiplayer check (snapshots, replays, leaving)
 ```
 
-Run `npm test` for the headless checks, or balance-check the bots with `node tools/simulate.js 50`.
+Run `npm test` for the headless checks.
+
+## Balance report
+
+`npm run balance` (about a minute; add `-- --quick` for ~15s, or `-- --json out.json` to save the numbers) prints:
+
+1. **Unit strength:** random fights between teams with matching costs and traits off. Each unit's win rate against other units of its cost, where 50% is average.
+2. **Trait value:** a team fights an identical copy with one trait switched off. "Worth" is the extra HP and attack damage the copy needs to break even, so tiers can be compared directly.
+3. **Cost curve:** how much stronger each cost and star level is than the one below, measured the same way.
+4. **Bot games:** pick rate and average placement of traits and units on final boards. This depends on how the bots build, so use it as a sanity check.
+
+Outliers are listed under **FLAGS** at the end. Re-run it after changing numbers in `js/data.js` to see the effect.

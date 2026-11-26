@@ -88,7 +88,7 @@ function makeUnit(u, side, col, row, tiers, rng) {
   if (has('tide')) cu.mana += val('tide');
   if (has('grove')) cu.regen = val('grove') / 100;
   if (has('storm')) cu.as *= 1 + val('storm') / 100;
-  if (has('void')) cu.crit += val('void') / 100;
+  if (has('void')) { cu.crit += val('void') / 100; cu.critDmg = 2; }
   if (has('guardian')) cu.armor += val('guardian');
   if (has('striker')) cu.ad *= 1 + val('striker') / 100;
   if (has('ranger')) cu.doubleChance = val('ranger') / 100;
@@ -102,7 +102,8 @@ function makeUnit(u, side, col, row, tiers, rng) {
 export class Combat {
   // teamA / teamB: arrays of { unit: {key, star, scale?}, x, y } in board coords
   // (x 0..6, y 0 = front row .. 3 = back row). Team A is drawn at the bottom.
-  constructor(teamA, teamB, { record = true, seed = randomSeed() } = {}) {
+  // tiersA / tiersB override each side's active traits ({ trait: tierIndex }); used by balance tests.
+  constructor(teamA, teamB, { record = true, seed = randomSeed(), tiersA = null, tiersB = null } = {}) {
     this.seed = seed;
     this.rng = mulberry32(seed);
     this.units = [];
@@ -112,8 +113,8 @@ export class Combat {
     this.record = record;
     this.over = false;
     this.winner = null;
-    const tA = activeTiers(teamA.map((p) => p.unit));
-    const tB = activeTiers(teamB.map((p) => p.unit));
+    const tA = tiersA || activeTiers(teamA.map((p) => p.unit));
+    const tB = tiersB || activeTiers(teamB.map((p) => p.unit));
     for (const p of teamA) this.spawn(p.unit, 'A', p.x, 4 + p.y, tA);
     for (const p of teamB) this.spawn(p.unit, 'B', COLS - 1 - p.x, 3 - p.y, tB);
   }
