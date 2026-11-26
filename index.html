@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hex Arena</title>
   <meta name="description" content="A browser auto battler: draft units, build synergies and outlast bots or friends online.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&display=swap">
   <link rel="stylesheet" href="css/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬢</text></svg>">
 </head>
@@ -24,12 +27,17 @@
 
     <main>
       <aside id="left">
+        <div id="augSection" class="hidden">
+          <h3>Augments</h3>
+          <div id="augList"></div>
+        </div>
         <h3>Synergies</h3>
         <div id="traits"></div>
       </aside>
       <section id="center">
         <div id="banner"></div>
         <canvas id="board"></canvas>
+        <div id="augPick" class="hidden"></div>
       </section>
       <aside id="right">
         <h3>Lobby</h3>
@@ -70,6 +78,7 @@
         <li>Units sharing a trait unlock <b>synergies</b> (left panel). Each unique unit counts once.</li>
         <li>Combat is automatic. Units attack, fill mana, and cast their ability when mana is full.</li>
         <li>Losing a fight costs HP. The last player standing wins.</li>
+        <li><b>Augments:</b> at rounds 3, 10 and 17 you pick one of three upgrades that last the whole game: economy boosts, team-wide combat bonuses, or a <b>crest</b> that counts as an extra unit of a trait you already have.</li>
         <li><b>Online:</b> combat starts when every player is ready or the timer runs out. The host's tab runs the game, so the host should keep it open.</li>
         <li><b>Gold:</b> 5 per round, plus 1 interest per 10 gold held (max 5), plus win/loss streak bonuses.</li>
         <li>Shortcuts: <kbd>D</kbd> reroll, <kbd>F</kbd> buy XP, <kbd>E</kbd> sell hovered unit, <kbd>Space</kbd> ready, right-click to sell. Drag a unit onto the shop to sell it.</li>

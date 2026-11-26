@@ -6,10 +6,12 @@
 import { Game } from '../js/game.js';
 import { Combat, STEP } from '../js/combat.js';
 import { UNITS, POOL_SIZE } from '../js/data.js';
+import { AUGMENT_ROUNDS } from '../js/augments.js';
 
 const games = Number(process.argv[2] || 10);
 let replays = 0;
 let flipped = 0;
+let augPicks = 0;
 
 function assert(c, msg) { if (!c) throw new Error(msg); }
 
@@ -42,6 +44,12 @@ function clientTurn(game, pid) {
   send({ type: 'move', from: { area: 'board', x: 99, y: -1 }, to: null });
   send({ type: 'sell', loc: { area: 'bench', i: 'x' } });
   send({ type: 'buy', i: 42 });
+  // Ready is refused while an augment pick is pending; then pick one.
+  if (v.me.augChoices.length) {
+    assert(!send({ type: 'ready', ready: true }), 'ready accepted before picking an augment');
+    assert(!send({ type: 'augment', i: 7 }), 'bad augment index accepted');
+    assert(send({ type: 'augment', i: pid % v.me.augChoices.length }), 'augment pick refused');
+  }
   send({ type: 'ready', ready: true });
 }
 
@@ -62,7 +70,7 @@ for (let g = 0; g < games; g++) {
       const v = JSON.parse(JSON.stringify(game.viewFor(p.id)));
       assert(v.match, `player ${p.id} has no match`);
       const host = game.matchOf(p).combat;
-      const c = new Combat(v.match.teamA, v.match.teamB, { seed: v.match.seed, record: true }).runToEnd();
+      const c = new Combat(v.match.teamA, v.match.teamB, { ...v.match.opts, record: true }).runToEnd();
       assert(c.winner === host.winner && Math.abs(c.time - host.time) < 1e-9,
         `replay mismatch: ${c.winner}@${c.time} vs ${host.winner}@${host.time}`);
       const hpA = c.units.map((u) => u.hp).join();
@@ -80,6 +88,15 @@ for (let g = 0; g < games; g++) {
     assert(t >= longest, `combat ended early (${t.toFixed(2)}s < ${longest.toFixed(2)}s)`);
     if (game.phase === 'results') while (game.phase === 'results') game.update(0.5);
     checkPool(game);
+    // Everyone alive has one augment per augment round so far (this round's may still be on offer).
+    const due = AUGMENT_ROUNDS.filter((r) => r <= game.round).length;
+    for (const p of game.alivePlayers()) {
+      const pending = p.augChoices.length ? 1 : 0;
+      assert(p.augments.length + pending === due, `${p.name} has ${p.augments.length} augments (+${pending} on offer) in round ${game.round}, expected ${due}`);
+      assert(!pending || p.isHuman, `bot ${p.name} did not pick its augment`);
+      assert(new Set(p.augments).size === p.augments.length, `${p.name} has a duplicate augment`);
+    }
+    augPicks += game.round === AUGMENT_ROUNDS[due - 1] ? game.alivePlayers().length : 0;
   }
   assert(game.phase === 'gameover', 'game did not finish');
   assert(!game.players[3].isHuman && game.players[3].name.endsWith('(left)'), 'dropped player not converted to bot');
@@ -88,7 +105,7 @@ for (let g = 0; g < games; g++) {
   for (const k in game.pool) assert(game.pool[k] >= 0, `pool negative for ${k}`);
 }
 
-console.log(`ok: ${games} games, ${replays} fight replays matched the host (${flipped} mirrored)`);
+console.log(`ok: ${games} games, ${replays} fight replays matched the host (${flipped} mirrored), ${augPicks} augment picks checked`);
 
 // Fair rotation: n players (+ a ghost "bye" when odd) must each meet every
 // opponent exactly once per cycle of (even n ? n-1 : n) rounds.

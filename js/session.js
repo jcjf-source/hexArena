@@ -226,7 +226,7 @@ export class ClientSession extends Session {
     if (a.type === 'move' && v) {
       if (moveUnit(v.me, a.from, a.to, v.phase !== 'planning')) this.onView();
     }
-    if (a.type === 'ready' && v) { v.me.ready = a.ready; this.onView(); }
+    if (a.type === 'ready' && v && !(a.ready && v.me.augChoices?.length)) { v.me.ready = a.ready; this.onView(); }
     try { this.conn.send({ t: 'act', a }); } catch (e) { console.warn('send failed', e); }
   }
 

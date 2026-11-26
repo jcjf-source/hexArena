@@ -6,6 +6,17 @@ import { countTraits, traitTier, getDef } from './combat.js';
 import {
   sellValue, REROLL_COST, XP_COST, getAt, boardUnits, boardCount, allUnits, canBuy,
 } from './game.js';
+import { AUGMENTS, traitBonus } from './augments.js';
+
+const KIND_LABEL = { econ: 'Economy', combat: 'Combat', crest: 'Crest' };
+
+function augmentInfoHTML(id) {
+  const a = AUGMENTS[id];
+  return `
+    <div class="info-head"><span class="info-icon">${a.icon}</span>
+      <div><div class="info-name">${a.name}</div><div class="muted">${KIND_LABEL[a.kind]} augment</div></div></div>
+    <div class="ability"><div class="ab-desc">${a.desc}</div></div>`;
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -92,6 +103,8 @@ export class UI {
   setSession(session) {
     this.session = session;
     this.spectating = false;
+    this.prevStats = null;
+    this.lastShop = null;
     session.onView = () => this.refresh();
     session.onBanner = (text, kind) => this.banner(text, kind);
     $('speedBtn').disabled = !session.isHost;
@@ -131,7 +144,21 @@ export class UI {
       if (!row || !this.v) return;
       const board = boardUnits(this.v.me).map((b) => b.unit);
       const owned = new Set(allUnits(this.v.me).map((l) => l.unit.key));
-      this.showInfo(traitInfoHTML(row.dataset.trait, countTraits(board)[row.dataset.trait] || 0, owned));
+      const counts = countTraits(board, traitBonus(this.v.me.augments));
+      this.showInfo(traitInfoHTML(row.dataset.trait, counts[row.dataset.trait] || 0, owned));
+    });
+    $('augList').addEventListener('mouseover', (e) => {
+      const chip = e.target.closest('[data-aug]');
+      if (chip) this.showInfo(augmentInfoHTML(chip.dataset.aug));
+    });
+    $('augPick').addEventListener('click', (e) => {
+      if (e.target.closest('#augToggle')) {
+        this.augHidden = !this.augHidden;
+        this.renderAugPick();
+        return;
+      }
+      const card = e.target.closest('.aug-card');
+      if (card) this.act({ type: 'augment', i: Number(card.dataset.i) });
     });
     $('traitRef').innerHTML = Object.keys(TRAITS).map((k) => {
       const t = TRAITS[k];
@@ -247,6 +274,7 @@ export class UI {
     if (v.phase === 'planning') t.textContent = `${Math.max(0, Math.ceil(v.timer))}s`;
     else if (v.phase === 'combat') t.textContent = combat ? `${Math.floor(combat.time)}s` : '';
     else t.textContent = '';
+    t.classList.toggle('warn', v.phase === 'planning' && v.timer <= 5);
     if (this.bannerTimer > 0) {
       this.bannerTimer -= dt;
       if (this.bannerTimer <= 0) $('banner').className = '';
@@ -272,10 +300,14 @@ export class UI {
     const ready = $('readyBtn');
     const solo = !this.session.multiplayer;
     const waiting = !solo && p.ready && v.phase === 'planning';
-    ready.disabled = v.phase !== 'planning' || !p.alive;
+    const picking = p.augChoices.length > 0;
+    ready.disabled = v.phase !== 'planning' || !p.alive || picking;
     ready.textContent = waiting ? 'Waiting… ✖' : 'Ready ▶';
-    ready.title = solo ? 'Start combat (Space)' : waiting ? 'Cancel ready (Space)' : 'Ready up (Space). Combat starts when everyone is ready.';
+    ready.title = picking ? 'Pick an augment first'
+      : solo ? 'Start combat (Space)' : waiting ? 'Cancel ready (Space)' : 'Ready up (Space). Combat starts when everyone is ready.';
     ready.classList.toggle('waiting', waiting);
+    ready.classList.toggle('pulse', !ready.disabled && !waiting);
+    this.floatDeltas(p);
     $('speedBtn').textContent = `${v.speed}x`;
     $('goldVal').textContent = p.gold;
     $('hpVal').textContent = Math.max(0, p.hp);
@@ -285,29 +317,95 @@ export class UI {
     $('xpFill').style.width = need ? `${(p.xp / need) * 100}%` : '100%';
     $('unitCap').textContent = `${boardCount(p)} / ${p.level}`;
     $('xpBtn').disabled = !p.alive || p.gold < XP_COST || p.level >= MAX_LEVEL;
-    $('rerollBtn').disabled = !p.alive || p.gold < REROLL_COST;
+    $('rerollBtn').disabled = !p.alive || (!p.freeReroll && p.gold < REROLL_COST);
+    $('rerollBtn').innerHTML = `Reroll<small>${p.freeReroll ? 'Free' : `${REROLL_COST}g`}</small>`;
     $('lockBtn').textContent = p.locked ? '🔒' : '🔓';
     $('lockBtn').classList.toggle('on', p.locked);
     const streak = p.streak;
     $('streak').textContent = Math.abs(streak) >= 2 ? (streak > 0 ? `🔥${streak}` : `❄️${-streak}`) : '';
 
     this.renderShop();
+    this.renderAugments();
+    this.renderAugPick();
     this.renderTraits();
     this.renderLobby();
     this.renderOverlay();
+  }
+
+  // Floating "+3" / "-12" next to gold and HP when they change.
+  floatDeltas(p) {
+    const prev = this.prevStats;
+    this.prevStats = { pid: this.v.pid, gold: p.gold, hp: p.hp };
+    if (!prev || prev.pid !== this.v.pid) return;
+    const pop = (host, text, cls) => {
+      const el = document.createElement('span');
+      el.className = `float-delta ${cls}`;
+      el.textContent = text;
+      host.appendChild(el);
+      setTimeout(() => el.remove(), 1200);
+    };
+    const dg = p.gold - prev.gold;
+    if (dg) pop(document.querySelector('.gold'), dg > 0 ? `+${dg}` : `${dg}`, dg > 0 ? 'up' : 'down');
+    const dh = p.hp - prev.hp;
+    if (dh) pop(document.querySelector('.hp'), dh > 0 ? `+${dh}` : `${dh}`, dh > 0 ? 'up' : 'down');
+  }
+
+  renderAugments() {
+    const ids = this.v.me.augments;
+    $('augSection').classList.toggle('hidden', !ids.length);
+    $('augList').innerHTML = ids.map((id) => {
+      const a = AUGMENTS[id];
+      return `<div class="aug-chip aug-${a.kind}" data-aug="${id}"><span class="aug-icon">${a.icon}</span>${a.name}</div>`;
+    }).join('');
+  }
+
+  // The pick-one-of-three panel over the board.
+  renderAugPick() {
+    const v = this.v;
+    const el = $('augPick');
+    const choices = v.phase === 'planning' && v.me.alive ? v.me.augChoices : [];
+    if (!choices.length) {
+      el.classList.add('hidden');
+      this.augKey = null;
+      return;
+    }
+    const key = choices.join();
+    if (key !== this.augKey) { this.augKey = key; this.augHidden = false; }
+    el.classList.remove('hidden');
+    el.classList.toggle('collapsed', !!this.augHidden);
+    if (this.augHidden) {
+      el.innerHTML = '<button id="augToggle" class="primary">Choose an augment ▲</button>';
+      return;
+    }
+    el.innerHTML = `
+      <div class="aug-title">Choose an augment</div>
+      <div class="aug-cards">${choices.map((id, i) => {
+        const a = AUGMENTS[id];
+        return `<button class="aug-card aug-${a.kind}" data-i="${i}">
+          <span class="aug-kind">${KIND_LABEL[a.kind]}</span>
+          <span class="aug-big">${a.icon}</span>
+          <span class="aug-name">${a.name}</span>
+          <span class="aug-desc">${a.desc}</span></button>`;
+      }).join('')}</div>
+      <button id="augToggle">Hide to see the board ▼</button>`;
   }
 
   renderShop() {
     const v = this.v;
     const p = v.me;
     const owned = new Set(allUnits(p).map((l) => l.unit.key));
+    $('shop').style.gridTemplateColumns = `repeat(${Math.max(5, p.shop.length)}, minmax(0, 1fr))`;
+    // Cards that changed since the last render (a reroll or new round) slide in.
+    const last = this.lastShop || [];
+    this.lastShop = p.shop.slice();
     $('shop').innerHTML = p.shop.map((key, i) => {
       if (!key) return '<div class="card empty"></div>';
       const d = UNITS[key];
       const cls = [`card`, `cost-${d.cost}`];
+      if (last[i] !== key) cls.push('fresh');
       if (owned.has(key)) cls.push('owned');
       if (!canBuy(p, key, this.locked)) cls.push('poor');
-      return `<div class="${cls.join(' ')}" data-i="${i}">
+      return `<div class="${cls.join(' ')}" data-i="${i}" style="--i:${i}">
         <div class="card-icon">${d.icon}</div>
         <div class="card-body"><div class="card-name">${d.name}</div>
         <div class="card-traits">${d.traits.map((t) => `<span>${TRAITS[t].icon} ${TRAITS[t].name}</span>`).join('')}</div></div>
@@ -317,7 +415,8 @@ export class UI {
 
   renderTraits() {
     const units = boardUnits(this.v.me).map((b) => b.unit);
-    const counts = countTraits(units);
+    const bonus = traitBonus(this.v.me.augments) || {};
+    const counts = countTraits(units, bonus);
     const rows = Object.keys(counts).map((k) => ({ k, c: counts[k], tier: traitTier(k, counts[k]) }));
     rows.sort((a, b) => (b.tier - a.tier) || (b.c - a.c));
     $('traits').innerHTML = rows.length ? rows.map(({ k, c, tier }) => {
@@ -329,7 +428,7 @@ export class UI {
         <span class="ticon">${t.icon}</span>
         <div class="tmain">
           <div class="thead"><span class="tname">${t.name}</span><span class="tcount">${c}</span></div>
-          <div class="tbp">${bps} ${need}</div>
+          <div class="tbp">${bps} ${need}${bonus[k] ? ` <span class="tcrest" title="Includes your crest">+${bonus[k]} crest</span>` : ''}</div>
           <div class="tdesc">${traitEffect(k, tier)}</div>
         </div></div>`;
     }).join('') : '<div class="muted">Place units on the board to activate synergies. Hover one to see what it does.</div>';
@@ -345,8 +444,9 @@ export class UI {
       const rdy = showReady && p.isHuman && p.alive ? `<span class="lp-ready ${p.ready ? 'on' : ''}">${p.ready ? '✔' : '…'}</span>` : '';
       return `
       <div class="lp ${p.id === v.pid ? 'me' : ''} ${p.alive ? '' : 'dead'} ${p.id === oppId ? 'opp' : ''}">
-        <div class="lp-name">${p.alive ? '' : `#${p.placement} `}${tag}${esc(p.name)}${rdy}<span class="lp-lvl">Lv ${p.level}</span></div>
-        <div class="lp-bar"><div style="width:${Math.max(0, p.hp)}%"></div></div>
+        <div class="lp-name">${p.alive ? '' : `#${p.placement} `}${tag}${esc(p.name)}${rdy}<span class="lp-lvl">Lv ${p.level}</span>${
+  (p.augments || []).map((id) => `<span class="lp-aug" title="${AUGMENTS[id].name}: ${esc(AUGMENTS[id].desc)}">${AUGMENTS[id].icon}</span>`).join('')}</div>
+        <div class="lp-bar ${p.hp < 30 ? 'low' : p.hp < 60 ? 'mid' : ''}"><div style="width:${Math.max(0, p.hp)}%"></div></div>
         <div class="lp-hp">${Math.max(0, p.hp)}</div>
       </div>`;
     }).join('');

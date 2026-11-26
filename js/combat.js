@@ -28,7 +28,8 @@ export function getDef(key) {
 }
 
 // Counts unique units per trait (duplicates of the same unit only count once).
-export function countTraits(units) {
+// bonus ({ trait: n }) adds extra count to traits that already have at least one unit (crests).
+export function countTraits(units, bonus = null) {
   const seen = new Set();
   const counts = {};
   for (const u of units) {
@@ -38,6 +39,7 @@ export function countTraits(units) {
     if (!d) continue;
     for (const t of d.traits) counts[t] = (counts[t] || 0) + 1;
   }
+  if (bonus) for (const t in bonus) if (counts[t]) counts[t] += bonus[t];
   return counts;
 }
 
@@ -47,8 +49,8 @@ export function traitTier(key, count) {
   return tier;
 }
 
-export function activeTiers(units) {
-  const counts = countTraits(units);
+export function activeTiers(units, bonus = null) {
+  const counts = countTraits(units, bonus);
   const out = {};
   for (const k in counts) {
     const t = traitTier(k, counts[k]);
@@ -99,11 +101,41 @@ function makeUnit(u, side, col, row, tiers, rng) {
   return cu;
 }
 
+// Team-wide modifiers from augments. y is the unit's board row (0 = front, 3 = back).
+function applyMods(cu, m, y) {
+  if (!m) return;
+  if (m.hpPct) cu.maxHp *= 1 + m.hpPct / 100;
+  if (m.dmgPct) cu.dmgAmp += m.dmgPct / 100;
+  if (m.asPct) cu.as *= 1 + m.asPct / 100;
+  if (m.armor) cu.armor += m.armor;
+  if (m.mr) cu.mr += m.mr;
+  if (m.ap) cu.ap += m.ap;
+  if (m.critPct) cu.crit += m.critPct / 100;
+  if (m.critDmgPct) cu.critDmg += m.critDmgPct / 100;
+  if (m.backAsPct && y >= 2 && cu.range > 1) cu.as *= 1 + m.backAsPct / 100;
+  if (m.mana && cu.maxMana) cu.mana = Math.min(cu.maxMana, cu.mana + m.mana);
+  if (m.backRange && y >= 2 && cu.range > 1) cu.range += m.backRange;
+  if (m.lifesteal) cu.lifesteal = m.lifesteal / 100;
+  // Crests: units with the trait get +pct% max HP and damage.
+  if (m.traitBoost) {
+    const pct = cu.def.traits.reduce((s, t) => s + (m.traitBoost[t] || 0), 0);
+    if (pct) { cu.maxHp *= 1 + pct / 100; cu.dmgAmp += pct / 100; }
+  }
+  cu.hp = cu.maxHp;
+  if (m.frontShieldPct && y === 0) {
+    cu.shield = cu.maxHp * m.frontShieldPct / 100;
+    cu.shieldTime = 8;
+  }
+}
+
 export class Combat {
   // teamA / teamB: arrays of { unit: {key, star, scale?}, x, y } in board coords
   // (x 0..6, y 0 = front row .. 3 = back row). Team A is drawn at the bottom.
-  // tiersA / tiersB override each side's active traits ({ trait: tierIndex }); used by balance tests.
-  constructor(teamA, teamB, { record = true, seed = randomSeed(), tiersA = null, tiersB = null } = {}) {
+  // tiersA / tiersB override each side's active traits ({ trait: tierIndex }).
+  // modsA / modsB are team-wide augment modifiers (see applyMods).
+  constructor(teamA, teamB, {
+    record = true, seed = randomSeed(), tiersA = null, tiersB = null, modsA = null, modsB = null,
+  } = {}) {
     this.seed = seed;
     this.rng = mulberry32(seed);
     this.units = [];
@@ -115,12 +147,13 @@ export class Combat {
     this.winner = null;
     const tA = tiersA || activeTiers(teamA.map((p) => p.unit));
     const tB = tiersB || activeTiers(teamB.map((p) => p.unit));
-    for (const p of teamA) this.spawn(p.unit, 'A', p.x, 4 + p.y, tA);
-    for (const p of teamB) this.spawn(p.unit, 'B', COLS - 1 - p.x, 3 - p.y, tB);
+    for (const p of teamA) this.spawn(p.unit, 'A', p.x, 4 + p.y, tA, modsA, p.y);
+    for (const p of teamB) this.spawn(p.unit, 'B', COLS - 1 - p.x, 3 - p.y, tB, modsB, p.y);
   }
 
-  spawn(unit, side, col, row, tiers) {
+  spawn(unit, side, col, row, tiers, mods = null, y = 0) {
     const cu = makeUnit(unit, side, col, row, tiers, this.rng);
+    applyMods(cu, mods, y);
     this.units.push(cu);
     this.grid.set(cellKey(col, row), cu);
   }
@@ -264,6 +297,7 @@ export class Combat {
     }
     t.hp -= dealt;
     src.dealt += dealt;
+    if (src.lifesteal && src.alive) src.hp = Math.min(src.maxHp, src.hp + dealt * src.lifesteal);
     this.emit({ type: 'dmg', unit: t.id, amount: Math.round(dealt), crit, kind });
     if (t.hp <= 0) {
       t.hp = 0;

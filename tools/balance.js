@@ -10,13 +10,15 @@
 //   2. Trait value: the same team fights itself with one trait switched off on one side.
 //      The win rate of the side with the trait shows what each tier is worth.
 //   3. Cost curve: do pricier / higher-star units beat cheaper ones by a sensible margin?
-//   4. Full bot games: pick rate and average placement of traits and units on final boards.
+//   4. Augments: what each combat augment and crest is worth, measured like traits.
+//   5. Full bot games: pick rate and average placement of traits, units and augments.
 //      This reflects how the bots play, so treat it as a sanity check, not the main signal.
 
 import fs from 'node:fs';
 import { UNITS, TRAITS } from '../js/data.js';
 import { Combat, activeTiers } from '../js/combat.js';
 import { Game } from '../js/game.js';
+import { AUGMENTS, traitBonus } from '../js/augments.js';
 
 const args = process.argv.slice(2);
 const quick = args.includes('--quick');
@@ -61,11 +63,11 @@ function place(units) {
 
 // Fights teamX vs teamY with random side assignment. Returns { win: 1 | 0 | 0.5, margin }
 // where margin is X's remaining HP share minus Y's (-1..1).
-function fight(teamX, teamY, tiersX = null, tiersY = null, { seed, xIsA = Math.random() < 0.5 } = {}) {
-  const opt = (tA, tB) => ({ record: false, tiersA: tA, tiersB: tB, ...(seed !== undefined ? { seed } : {}) });
+function fight(teamX, teamY, tiersX = null, tiersY = null, { seed, xIsA = Math.random() < 0.5, modsX = null, modsY = null } = {}) {
+  const opt = (tA, tB, mA, mB) => ({ record: false, tiersA: tA, tiersB: tB, modsA: mA, modsB: mB, ...(seed !== undefined ? { seed } : {}) });
   const c = xIsA
-    ? new Combat(teamX, teamY, opt(tiersX, tiersY))
-    : new Combat(teamY, teamX, opt(tiersY, tiersX));
+    ? new Combat(teamX, teamY, opt(tiersX, tiersY, modsX, modsY))
+    : new Combat(teamY, teamX, opt(tiersY, tiersX, modsY, modsX));
   c.runToEnd();
   const sideX = xIsA ? 'A' : 'B';
   const share = (side) => {
@@ -89,7 +91,7 @@ function powerRatio(makeSample, n) {
     let m = 0;
     let w = 0;
     for (const x of samples) {
-      const r = fight(x.X, scaled(x.Y, s), x.tiersX, x.tiersY, { seed: x.seed, xIsA: x.xIsA });
+      const r = fight(x.X, scaled(x.Y, s), x.tiersX, x.tiersY, { seed: x.seed, xIsA: x.xIsA, modsX: x.modsX, modsY: x.modsY });
       m += r.margin;
       w += r.win;
     }
@@ -173,20 +175,27 @@ function traitValue() {
     });
   }
   // Compare each tier with the median of traits at the same breakpoint.
-  const median = (xs) => { const s = xs.slice().sort((a, b) => a - b); return s[(s.length - 1) >> 1]; };
-  const medByBp = {};
-  for (const bp of [2, 4]) medByBp[bp] = median(rows.filter((r) => r.bp === bp).map((r) => r.ratio - 1));
+  // Expected worth for a tier of any size: a power-law curve (worth = a * size^b) fitted
+  // through every trait's tiers. Bigger tiers cost more units, so they should be worth more;
+  // this lets a lone 3- or 5-unit tier be judged against the rest.
+  const pts = rows.filter((r) => r.ratio - 1 > 0.005).map((r) => [Math.log(r.bp), Math.log(r.ratio - 1)]);
+  const mx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+  const my = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  const slope = pts.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0) / pts.reduce((s, p) => s + (p[0] - mx) ** 2, 0);
+  const expected = (bp) => Math.exp(my + slope * (Math.log(bp) - mx));
   for (const t of Object.keys(TRAITS)) {
     const mine = rows.filter((r) => r.t === t);
     const cells = mine.map((r) => `(${r.bp}) ${boost(r.ratio).padStart(5)} ${pct(r.win).padStart(6)}`).join('   ');
     const notes = [];
     for (const r of mine) {
       const v = r.ratio - 1;
-      const med = medByBp[r.bp];
-      if (med !== undefined && v > Math.max(med * 1.6, med + 0.08)) notes.push(`(${r.bp}) strong`);
-      if (med !== undefined && v < Math.min(med * 0.6, med - 0.05)) notes.push(`(${r.bp}) weak`);
-      if (med !== undefined && (v > Math.max(med * 1.6, med + 0.08) || v < Math.min(med * 0.6, med - 0.05))) {
-        flags.push(`Trait ${TRAITS[t].name} (${r.bp}) is worth ${boost(r.ratio)} stats; median for (${r.bp}) traits is ${boost(1 + med)}`);
+      const e = expected(r.bp);
+      const strong = v > Math.max(e * 1.6, e + 0.08);
+      const weak = v < Math.min(e * 0.6, e - 0.05);
+      if (strong) notes.push(`(${r.bp}) strong`);
+      if (weak) notes.push(`(${r.bp}) weak`);
+      if (strong || weak) {
+        flags.push(`Trait ${TRAITS[t].name} (${r.bp}) is worth ${boost(r.ratio)} stats; a typical ${r.bp}-unit tier is about ${boost(1 + e)}`);
       }
     }
     // A higher tier should be clearly better than the one below it.
@@ -200,7 +209,8 @@ function traitValue() {
     console.log(`   ${(TRAITS[t].icon + ' ' + TRAITS[t].name).padEnd(13)} ${cells.padEnd(52)} ${notes.length ? '◀ ' + notes.join(', ') : ''}`);
     out.traits[t] = mine.map(({ bp, ratio, win }) => ({ breakpoint: bp, worth: ratio - 1, winRate: win }));
   }
-  console.log(`   median worth: (2) ${boost(1 + medByBp[2])}, (4) ${boost(1 + medByBp[4])}   (${elapsed(t0)})`);
+  const sizes = [...new Set(rows.map((r) => r.bp))].sort((a, b) => a - b);
+  console.log(`   typical worth by tier size: ${sizes.map((bp) => `(${bp}) ${boost(1 + expected(bp))}`).join(', ')}   (${elapsed(t0)})`);
 }
 
 // ------------------------------------------------------------ 3. cost curve
@@ -227,11 +237,72 @@ function costCurve() {
   console.log(`   (${elapsed(t0)})`);
 }
 
-// ------------------------------------------------------------ 4. full bot games
+// ------------------------------------------------------------ 4. augments
+// Combat augments: a random team with the augment vs the same team without it.
+// Crests: a realistic team holding some of the trait, with vs without the crest.
+// Economy augments can't be measured by a fight; the bot games show how they do.
+function augmentValue() {
+  const t0 = Date.now();
+  console.log(`\n4. AUGMENTS  (power equivalent, ${N.traitFights} mirror fights each)\n`);
+  const costWeights = [1, 2, 2, 3, 3, 4, 4, 5];
+  const randomTeam = () => Array.from({ length: 7 }, () => {
+    const c = costWeights[rnd(costWeights.length)];
+    return { key: byCost[c][rnd(byCost[c].length)], star: Math.random() < 0.5 ? 1 : 2 };
+  });
+  const rows = [];
+  for (const id of Object.keys(AUGMENTS).filter((k) => AUGMENTS[k].kind === 'combat')) {
+    const mods = AUGMENTS[id].mods;
+    const r = powerRatio(() => {
+      const team = randomTeam();
+      const placed = place(team);
+      const tiers = activeTiers(team);
+      return { X: placed, Y: placed, tiersX: tiers, tiersY: tiers, modsX: mods };
+    }, N.traitFights);
+    rows.push({ id, ...r });
+  }
+  const median = (xs) => { const s = xs.slice().sort((a, b) => a - b); return s[(s.length - 1) >> 1]; };
+  const med = median(rows.map((r) => r.ratio - 1));
+  console.log('   Combat augments');
+  for (const r of rows.sort((a, b) => b.ratio - a.ratio)) {
+    const v = r.ratio - 1;
+    let flag = '';
+    if (v > med * 1.6 && v > med + 0.05) { flag = '◀ strong'; flags.push(`Augment ${AUGMENTS[r.id].name} is worth ${boost(r.ratio)}; median combat augment is ${boost(1 + med)}`); }
+    if (v < med * 0.6 && v < med - 0.04) { flag = '◀ weak'; flags.push(`Augment ${AUGMENTS[r.id].name} is worth ${boost(r.ratio)}; median combat augment is ${boost(1 + med)}`); }
+    console.log(`     ${(AUGMENTS[r.id].icon + ' ' + AUGMENTS[r.id].name).padEnd(18)} ${boost(r.ratio).padStart(5)}  ${flag}`);
+    out.augments = out.augments || {};
+    out.augments[r.id] = { worth: v };
+  }
+  console.log(`     median ${boost(1 + med)}`);
+
+  console.log('\n   Crests (7-unit teams holding 1-4 units of the trait, with vs without the crest)');
+  for (const t of Object.keys(TRAITS)) {
+    const carriers = withTrait(t);
+    const others = KEYS.filter((k) => !UNITS[k].traits.includes(t));
+    const mods = AUGMENTS[`crest_${t}`].mods || null;
+    const r = powerRatio(() => {
+      const k = 1 + rnd(Math.min(4, carriers.length));
+      const team = [...pickN(carriers, k), ...pickN(others, 7 - k)]
+        .map((key) => ({ key, star: Math.random() < 0.5 ? 1 : 2 }));
+      const placed = place(team);
+      return { X: placed, Y: placed, tiersX: activeTiers(team, { [t]: 1 }), tiersY: activeTiers(team), modsX: mods };
+    }, N.traitFights);
+    const v = r.ratio - 1;
+    let flag = '';
+    if (v > med * 1.6 && v > med + 0.05) { flag = '◀ strong'; flags.push(`${TRAITS[t].name} Crest is worth ${boost(r.ratio)}; median combat augment is ${boost(1 + med)}`); }
+    if (v < med * 0.6 && v < med - 0.04) { flag = '◀ weak'; flags.push(`${TRAITS[t].name} Crest is worth ${boost(r.ratio)}; median combat augment is ${boost(1 + med)}`); }
+    console.log(`     ${(TRAITS[t].icon + ' ' + TRAITS[t].name + ' Crest').padEnd(18)} ${boost(r.ratio).padStart(5)}  ${flag}`);
+    out.augments = out.augments || {};
+    out.augments[`crest_${t}`] = { worth: v };
+  }
+  console.log(`   (${elapsed(t0)})`);
+}
+
+// ------------------------------------------------------------ 5. full bot games
 function botGames() {
   const t0 = Date.now();
   const traitStat = {};
   const unitStat = Object.fromEntries(KEYS.map((k) => [k, { n: 0, place: 0, top4: 0 }]));
+  const augStat = Object.fromEntries(Object.keys(AUGMENTS).map((k) => [k, { n: 0, place: 0, top4: 0 }]));
   let boards = 0;
   for (let g = 0; g < N.games; g++) {
     const game = new Game({ humans: [] });
@@ -250,7 +321,11 @@ function botGames() {
       const team = (lastTeam[p.id] || []).map((s) => s.unit);
       const place = p.placement;
       boards++;
-      for (const [t, tier] of Object.entries(activeTiers(team))) {
+      for (const id of p.augments) {
+        const s = augStat[id];
+        s.n++; s.place += place; s.top4 += place <= 4 ? 1 : 0;
+      }
+      for (const [t, tier] of Object.entries(activeTiers(team, traitBonus(p.augments)))) {
         const key = `${t}:${tier}`;
         const s = (traitStat[key] ||= { n: 0, place: 0, top4: 0 });
         s.n++; s.place += place; s.top4 += place <= 4 ? 1 : 0;
@@ -261,7 +336,7 @@ function botGames() {
       }
     }
   }
-  console.log(`\n4. FULL BOT GAMES  (${N.games} games, final board of each player, ${elapsed(t0)})`);
+  console.log(`\n5. FULL BOT GAMES  (${N.games} games, final board of each player, ${elapsed(t0)})`);
   console.log('   Avg placement: 1 = best, 8 = worst, 4.5 = average. Biased by how the bots build and by');
   console.log('   expensive units only appearing on boards that survived long, so use it as a sanity check.\n');
   console.log('   Trait (tier)        played   avg place   top 4');
@@ -282,6 +357,17 @@ function botGames() {
   }
   const unplayed = KEYS.filter((k) => !unitStat[k].n);
   if (unplayed.length) console.log(`   never on a final board: ${unplayed.map((k) => UNITS[k].name).join(', ')}`);
+
+  console.log('\n   Augment (bots\' picks)      picked   avg place   top 4');
+  const arows = Object.keys(AUGMENTS).map((id) => ({ id, ...augStat[id] })).filter((r) => r.n >= 10)
+    .map((r) => ({ ...r, avg: r.place / r.n, top4r: r.top4 / r.n })).sort((a, b) => a.avg - b.avg);
+  for (const r of arows) {
+    const a = AUGMENTS[r.id];
+    console.log(`   ${`${a.icon} ${a.name}`.padEnd(26)} ${String(r.n).padStart(6)}   ${r.avg.toFixed(2).padStart(9)}   ${pct(r.top4r).padStart(6)}`);
+    out.games[`augment:${r.id}`] = { picks: r.n, avgPlacement: r.avg, top4: r.top4r };
+  }
+  console.log('   (Picked early or late changes what an augment is worth, and bots favour crests and');
+  console.log('    combat augments, so economy augments get fewer, more random picks.)');
 }
 
 const start = Date.now();
@@ -289,6 +375,7 @@ console.log(`Hex Arena balance report${quick ? ' (quick)' : ''}`);
 unitStrength();
 traitValue();
 costCurve();
+augmentValue();
 botGames();
 
 console.log(`\nFLAGS (${flags.length})`);

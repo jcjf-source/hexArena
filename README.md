@@ -46,6 +46,7 @@ Limits: there is no relay (TURN) server, so some strict networks (certain workpl
 - **Star ups:** three copies of a unit combine into a 2★, and three 2★ into a 3★.
 - **Traits:** 5 origins (Ember, Tide, Grove, Storm, Void) and 5 classes (Guardian, Striker, Ranger, Mystic, Arcanist), each with 2/4(/6) breakpoints.
 - **Damage:** losing a fight costs stage damage plus the stars of every surviving enemy unit.
+- **Augments:** at rounds 3, 10 and 17 everyone picks one of three upgrades for the rest of the game: economy boosts, team-wide combat bonuses, or a crest (+1 to a trait you have, and +15% HP and damage for its units). Augments are defined in `js/augments.js`; `npm run balance` measures the combat ones and crests.
 
 **Controls:** drag units between the bench and the board. Drag a unit onto the shop or right-click it to sell. Keys: `D` reroll, `F` buy XP, `E` sell the hovered unit, `Space` ready.
 

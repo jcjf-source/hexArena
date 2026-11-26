@@ -28,13 +28,13 @@ export const TRAITS = {
   ember:    { name: 'Ember',    icon: '🔥', breakpoints: [2, 4],    values: [20, 45],      desc: 'Ember units deal +{v}% damage.' },
   tide:     { name: 'Tide',     icon: '🌊', breakpoints: [2, 4],    values: [30, 60],      desc: 'Tide units start combat with +{v} mana.' },
   grove:    { name: 'Grove',    icon: '🌿', breakpoints: [2, 4, 6], values: [2, 3, 5],     desc: 'Grove units regenerate {v}% of their max HP each second.' },
-  storm:    { name: 'Storm',    icon: '⚡', breakpoints: [2, 4],    values: [25, 60],      desc: 'Storm units gain +{v}% attack speed.' },
-  void:     { name: 'Void',     icon: '🌑', breakpoints: [2, 4],    values: [35, 70],      desc: 'Void units gain +{v}% critical strike chance, and their crits deal 200% damage.' },
+  storm:    { name: 'Storm',    icon: '⚡', breakpoints: [3, 5],    values: [40, 90],      desc: 'Storm units gain +{v}% attack speed.' },
+  void:     { name: 'Void',     icon: '🌑', breakpoints: [3, 5],    values: [45, 100],      desc: 'Void units gain +{v}% critical strike chance, and their crits deal 200% damage.' },
   guardian: { name: 'Guardian', icon: '🛡️', breakpoints: [2, 4, 6], values: [35, 80, 200], desc: 'Guardians gain +{v} armor.' },
   striker:  { name: 'Striker',  icon: '⚔️', breakpoints: [2, 4],    values: [25, 60],      desc: 'Strikers gain +{v}% attack damage.' },
   ranger:   { name: 'Ranger',   icon: '🏹', breakpoints: [2, 4],    values: [30, 65],      desc: 'Rangers have a {v}% chance to attack twice.' },
-  mystic:   { name: 'Mystic',   icon: '🔮', breakpoints: [2, 4],    values: [30, 70],      desc: 'All allies gain +{v} magic resist.' },
-  arcanist: { name: 'Arcanist', icon: '✨', breakpoints: [2, 4],    values: [40, 60],      desc: 'Arcanists gain +{v} ability power.' },
+  mystic:   { name: 'Mystic',   icon: '🔮', breakpoints: [3, 5],    values: [45, 100],     desc: 'All allies gain +{v} magic resist.' },
+  arcanist: { name: 'Arcanist', icon: '✨', breakpoints: [3, 5],    values: [35, 65],      desc: 'Arcanists gain +{v} ability power.' },
 };
 
 // Ability types: shield, nuke, snipe, multishot, frenzy, slam, aoe, chain, heal, teamheal, dash.

@@ -44,7 +44,7 @@ function syncReplay(v, dt) {
     replay = {
       round: v.round,
       flip: m.flip,
-      combat: new Combat(m.teamA, m.teamB, { seed: m.seed, record: true }),
+      combat: new Combat(m.teamA, m.teamB, { ...m.opts, record: true }),
       acc: 0,
     };
   }

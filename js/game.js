@@ -5,7 +5,10 @@
 import {
   UNITS, POOL_SIZE, SHOP_ODDS, XP_TO_LEVEL, MAX_LEVEL, isPveRound, creepWave,
 } from './data.js';
-import { Combat, countTraits, randomSeed } from './combat.js';
+import { Combat, countTraits, activeTiers, randomSeed } from './combat.js';
+import {
+  AUGMENTS, AUGMENT_ROUNDS, AUGMENT_EXTRA_TIME, has, combatMods, traitBonus, rollChoices,
+} from './augments.js';
 
 export const BOARD_W = 7;
 export const BOARD_H = 4;
@@ -141,6 +144,7 @@ function newPlayer(id, name, isHuman) {
     bench: Array(BENCH_SIZE).fill(null),
     shop: [], locked: false, ready: false,
     streak: 0, alive: true, placement: 0,
+    augments: [], augChoices: [], freeReroll: false,
   };
 }
 
@@ -197,7 +201,8 @@ export class Game {
     const p = this.players[pid];
     if (!p || !p.isHuman || !p.alive || !a || this.phase === 'gameover') return false;
     switch (a.type) {
-      case 'buy': return Number.isInteger(a.i) && a.i >= 0 && a.i < SHOP_SIZE && this.buy(p, a.i);
+      case 'buy': return Number.isInteger(a.i) && a.i >= 0 && a.i < p.shop.length && this.buy(p, a.i);
+      case 'augment': return Number.isInteger(a.i) && this.pickAugment(p, a.i);
       case 'reroll': return this.reroll(p);
       case 'xp': return this.buyXp(p);
       case 'sell': return validLoc(a.loc) && this.sell(p, a.loc);
@@ -214,6 +219,7 @@ export class Game {
 
   setReady(p, ready) {
     if (this.phase !== 'planning') return false;
+    if (ready && p.augChoices.length) return false; // pick an augment first
     p.ready = ready;
     this.changed();
     return true;
@@ -259,7 +265,7 @@ export class Game {
   // buy the last copy. Unbought cards go back when the shop is replaced.
   rollShop(p) {
     this.releaseShop(p);
-    p.shop = Array.from({ length: SHOP_SIZE }, () => {
+    p.shop = Array.from({ length: this.shopSize(p) }, () => {
       const key = this.pickFromPool(p.level);
       if (key) this.pool[key]--;
       return key;
@@ -318,12 +324,69 @@ export class Game {
     return true;
   }
 
+  shopSize(p) {
+    return SHOP_SIZE + (has(p.augments, 'recruiter') ? 1 : 0);
+  }
+
   reroll(p) {
-    if (p.gold < REROLL_COST) return false;
-    p.gold -= REROLL_COST;
+    if (p.freeReroll) p.freeReroll = false;
+    else if (p.gold < REROLL_COST) return false;
+    else p.gold -= REROLL_COST;
     this.rollShop(p);
     this.changed();
     return true;
+  }
+
+  // ------------------------------------------------------------ augments
+  pickAugment(p, i) {
+    const id = p.augChoices[i];
+    if (!id) return false;
+    p.augChoices = [];
+    p.augments.push(id);
+    if (id === 'windfall') p.gold += 12;
+    if (id === 'secondwind') p.hp = Math.min(100, p.hp + 25);
+    if (id === 'bargain') p.freeReroll = true;
+    if (id === 'recruiter') this.rollShop(p);
+    if (id === 'luckyfind') {
+      for (let n = 0; n < 2; n++) {
+        const keys = Object.keys(UNITS).filter((k) => UNITS[k].cost === 2 && this.pool[k] > 0);
+        const slot = p.bench.indexOf(null);
+        if (!keys.length) break;
+        if (slot < 0) { p.gold += 2; continue; }
+        const key = keys[rand(keys.length)];
+        this.pool[key]--;
+        p.bench[slot] = makeInst(key);
+        this.combine(p, key);
+      }
+    }
+    this.banner(p, `${AUGMENTS[id].icon} ${AUGMENTS[id].name}`, 'star');
+    this.changed();
+    return true;
+  }
+
+  offerAugments(p) {
+    const traits = new Set(allUnits(p).flatMap((l) => UNITS[l.unit.key].traits));
+    p.augChoices = rollChoices(p.augments, traits);
+  }
+
+  // Bots: a crest for a trait they're building, else a combat augment, else anything.
+  aiPickAugment(p) {
+    if (!p.augChoices.length) return;
+    const counts = countTraits(allUnits(p).map((l) => l.unit));
+    const score = (id) => {
+      const a = AUGMENTS[id];
+      if (a.kind === 'crest') return 2 + (counts[a.crest] || 0);
+      if (a.kind === 'combat') return 2.5;
+      return 1 + Math.random();
+    };
+    let best = 0;
+    p.augChoices.forEach((id, i) => { if (score(id) > score(p.augChoices[best])) best = i; });
+    this.pickAugment(p, best);
+  }
+
+  // Active traits for a player's team, including crests.
+  tiersFor(p, team) {
+    return activeTiers(team.map((s) => s.unit), traitBonus(p.augments));
   }
 
   buyXp(p) {
@@ -401,27 +464,32 @@ export class Game {
   }
 
   income(p) {
-    const interest = Math.min(5, Math.floor(p.gold / 10));
+    const interest = Math.min(has(p.augments, 'richer') ? 7 : 5, Math.floor(p.gold / 10));
     const s = Math.abs(p.streak);
     const streak = s >= 5 ? 3 : s >= 4 ? 2 : s >= 2 ? 1 : 0;
-    return 5 + interest + streak;
+    return 5 + interest + streak + (has(p.augments, 'salary') ? 2 : 0);
   }
 
   nextRound() {
     this.round++;
     this.phase = 'planning';
     this.matches = [];
+    const augRound = AUGMENT_ROUNDS.includes(this.round);
     for (const p of this.alivePlayers()) {
       if (this.round > 1) {
         p.gold += this.income(p);
-        this.addXp(p, 2);
+        this.addXp(p, has(p.augments, 'learner') ? 4 : 2);
       }
       if (!p.locked || !p.shop.length) this.rollShop(p);
       p.ready = false;
+      p.freeReroll = has(p.augments, 'bargain');
       this.combineAll(p);
+      if (augRound) this.offerAugments(p);
     }
-    for (const p of this.alivePlayers()) if (!p.isHuman) this.aiTurn(p);
-    this.timer = PLANNING_TIME;
+    for (const p of this.alivePlayers()) {
+      if (!p.isHuman) { this.aiPickAugment(p); this.aiTurn(p); }
+    }
+    this.timer = PLANNING_TIME + (augRound ? AUGMENT_EXTRA_TIME : 0);
     this.changed();
   }
 
@@ -508,16 +576,27 @@ export class Game {
 
   startCombat() {
     if (this.phase !== 'planning') return;
-    for (const p of this.alivePlayers()) this.autoFill(p);
+    for (const p of this.alivePlayers()) {
+      // Anyone who ran out of time without choosing gets a random augment.
+      if (p.augChoices.length) this.pickAugment(p, rand(p.augChoices.length));
+      this.autoFill(p);
+    }
     this.phase = 'combat';
     this.matches = this.makeMatches();
-    // Every fight is resolved here, instantly. Viewers replay it from (teams, seed).
+    // Every fight is resolved here, instantly. Viewers replay it from (teams, seed, augment effects).
     let longest = 0;
     for (const m of this.matches) {
       m.teamA = this.teamOf(m.a);
       m.teamB = m.pve ? creepWave(this.round) : this.teamOf(m.b);
       m.seed = randomSeed();
-      m.combat = new Combat(m.teamA, m.teamB, { record: false, seed: m.seed }).runToEnd();
+      m.opts = {
+        seed: m.seed,
+        tiersA: this.tiersFor(m.a, m.teamA),
+        modsA: combatMods(m.a.augments),
+        tiersB: m.pve ? null : this.tiersFor(m.b, m.teamB),
+        modsB: m.pve ? null : combatMods(m.b.augments),
+      };
+      m.combat = new Combat(m.teamA, m.teamB, { ...m.opts, record: false }).runToEnd();
       const watched = m.a.isHuman || (!m.ghost && m.b && m.b.isHuman);
       if (watched) longest = Math.max(longest, m.combat.time);
     }
@@ -535,6 +614,14 @@ export class Game {
     if (r <= 18) return 6;
     if (r <= 24) return 9;
     return 12;
+  }
+
+  // Applies a lost fight's damage to a player; returns the damage actually taken.
+  takeDamage(p, dmg) {
+    if (has(p.augments, 'thickskin')) dmg = Math.ceil(dmg * 0.7);
+    p.hp -= dmg;
+    if (has(p.augments, 'underdog')) p.gold += 2;
+    return dmg;
   }
 
   survivorDamage(combat, side) {
@@ -561,12 +648,12 @@ export class Game {
       if (m.pve) {
         const p = m.a;
         if (w === 'A') {
-          p.gold += 2;
+          const gold = 2 + (has(p.augments, 'hunter') ? 4 : 0);
+          p.gold += gold;
           const loot = this.pveLoot(p);
-          this.banner(p, `Victory! +2 gold, ${loot}`, 'win');
+          this.banner(p, `Victory! +${gold} gold, ${loot}`, 'win');
         } else {
-          const dmg = 2 + this.survivorDamage(c, 'B');
-          p.hp -= dmg;
+          const dmg = this.takeDamage(p, 2 + this.survivorDamage(c, 'B'));
           const kills = c.units.filter((u) => u.side === 'B' && !u.alive).length;
           p.gold += kills;
           this.banner(p, `Defeat... -${dmg} HP (+${kills} gold)`, 'loss');
@@ -581,8 +668,7 @@ export class Game {
           p.streak = p.streak > 0 ? p.streak + 1 : 1;
           this.banner(p, 'Victory! +1 gold', 'win');
         } else {
-          const dmg = this.stageDamage() + this.survivorDamage(c, theirs);
-          p.hp -= dmg;
+          const dmg = this.takeDamage(p, this.stageDamage() + this.survivorDamage(c, theirs));
           p.streak = p.streak < 0 ? p.streak - 1 : -1;
           this.banner(p, `${w === 'draw' ? 'Draw' : 'Defeat'}... -${dmg} HP`, 'loss');
         }
@@ -647,7 +733,7 @@ export class Game {
       const flip = m.b === me;
       const opp = flip ? m.a : m.b;
       match = {
-        seed: m.seed, teamA: m.teamA, teamB: m.teamB, flip,
+        seed: m.seed, teamA: m.teamA, teamB: m.teamB, opts: m.opts, flip,
         pve: !!m.pve, ghost: !!m.ghost && !flip,
         oppId: opp ? opp.id : -1, oppName: opp ? opp.name : 'Monsters',
       };
@@ -662,10 +748,11 @@ export class Game {
         id: me.id, name: me.name, hp: me.hp, gold: me.gold, level: me.level, xp: me.xp,
         board: me.board, bench: me.bench, shop: me.shop, locked: me.locked, ready: me.ready,
         streak: me.streak, alive: me.alive, placement: me.placement,
+        augments: me.augments, augChoices: me.augChoices, freeReroll: me.freeReroll,
       },
       players: this.players.map((p) => ({
         id: p.id, name: p.name, hp: p.hp, level: p.level, alive: p.alive,
-        placement: p.placement, isHuman: p.isHuman, ready: p.ready,
+        placement: p.placement, isHuman: p.isHuman, ready: p.ready, augments: p.augments,
       })),
       match,
     });
@@ -691,7 +778,7 @@ export class Game {
   }
 
   aiShop(p, reserve) {
-    for (let i = 0; i < SHOP_SIZE; i++) {
+    for (let i = 0; i < p.shop.length; i++) {
       const key = p.shop[i];
       if (!key) continue;
       const owned = allUnits(p).map((l) => l.unit);
