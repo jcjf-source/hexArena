@@ -9,6 +9,20 @@ export const STEP = 1 / 30;
 const MOVE_TIME = 0.38; // seconds to move one hex
 let NEXT_ID = 1;
 
+// Small seeded PRNG so every client can replay an identical fight from a seed.
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export const randomSeed = () => Math.floor(Math.random() * 4294967296);
+
 export function getDef(key) {
   return UNITS[key] || CREEPS[key];
 }
@@ -55,7 +69,7 @@ function minBy(arr, f) {
 
 const dist = (a, b) => hexDist(a.col, a.row, b.col, b.row);
 
-function makeUnit(u, side, col, row, tiers) {
+function makeUnit(u, side, col, row, tiers, rng) {
   const def = getDef(u.key);
   const m = STAR_MULT[u.star - 1] * (u.scale || 1);
   const cu = {
@@ -65,7 +79,7 @@ function makeUnit(u, side, col, row, tiers) {
     armor: def.armor, mr: def.mr,
     mana: def.mana ? def.mana[0] : 0, maxMana: def.mana ? def.mana[1] : 0,
     ap: 100, crit: 0.1, critDmg: 1.5, dmgAmp: 1, regen: 0, doubleChance: 0,
-    shield: 0, shieldTime: 0, stun: 0, cd: 0.15 + Math.random() * 0.35,
+    shield: 0, shieldTime: 0, stun: 0, cd: 0.15 + rng() * 0.35,
     target: null, alive: true, ability: def.ability, dealt: 0,
   };
   const has = (t) => def.traits.includes(t) && tiers[t] !== undefined;
@@ -88,7 +102,9 @@ function makeUnit(u, side, col, row, tiers) {
 export class Combat {
   // teamA / teamB: arrays of { unit: {key, star, scale?}, x, y } in board coords
   // (x 0..6, y 0 = front row .. 3 = back row). Team A is drawn at the bottom.
-  constructor(teamA, teamB, { record = true } = {}) {
+  constructor(teamA, teamB, { record = true, seed = randomSeed() } = {}) {
+    this.seed = seed;
+    this.rng = mulberry32(seed);
     this.units = [];
     this.grid = new Map();
     this.time = 0;
@@ -103,7 +119,7 @@ export class Combat {
   }
 
   spawn(unit, side, col, row, tiers) {
-    const cu = makeUnit(unit, side, col, row, tiers);
+    const cu = makeUnit(unit, side, col, row, tiers, this.rng);
     this.units.push(cu);
     this.grid.set(cellKey(col, row), cu);
   }
@@ -225,9 +241,9 @@ export class Combat {
   }
 
   attack(u, t) {
-    const hits = u.doubleChance && Math.random() < u.doubleChance ? 2 : 1;
+    const hits = u.doubleChance && this.rng() < u.doubleChance ? 2 : 1;
     for (let i = 0; i < hits; i++) {
-      const crit = Math.random() < u.crit;
+      const crit = this.rng() < u.crit;
       this.emit({ type: 'attack', from: u.id, to: t.id, ranged: u.range > 1, delay: i * 0.08 });
       this.damage(u, t, u.ad * (crit ? u.critDmg : 1), 'phys', crit);
     }

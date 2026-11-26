@@ -8,21 +8,14 @@ const roundsPlayed = [];
 const winsByTrait = {};
 
 for (let g = 0; g < games; g++) {
-  const game = new Game({ humanIsBot: true });
+  const game = new Game({ humans: [] });
   game.start();
   let guard = 0;
-  // Keep playing until one bot remains (ignore "human" elimination for the sim).
-  while (game.alivePlayers().length > 1 && guard++ < 80) {
-    if (game.phase === 'gameover') {
-      if (game.alivePlayers().length <= 1) break;
-      game.phase = 'planning';
-      game.human = game.alivePlayers()[0];
-      game.nextRound();
-    }
+  while (game.phase !== 'gameover' && guard++ < 80) {
     game.startCombat();
     if (game.phase === 'results') game.nextRound();
   }
-  const winner = game.alivePlayers()[0];
+  const winner = game.players.find((p) => p.placement === 1);
   roundsPlayed.push(game.round);
   for (const b of game.boardUnits(winner)) {
     for (const t of UNITS[b.unit.key].traits) winsByTrait[t] = (winsByTrait[t] || 0) + 1;

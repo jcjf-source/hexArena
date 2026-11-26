@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hex Arena</title>
-  <meta name="description" content="A browser auto battler: draft units, build synergies and outlast seven bots.">
+  <meta name="description" content="A browser auto battler: draft units, build synergies and outlast bots or friends online.">
   <link rel="stylesheet" href="css/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬢</text></svg>">
 </head>
@@ -70,6 +70,7 @@
         <li>Units sharing a trait unlock <b>synergies</b> (left panel). Each unique unit counts once.</li>
         <li>Combat is automatic. Units attack, fill mana, and cast their ability when mana is full.</li>
         <li>Losing a fight costs HP. The last player standing wins.</li>
+        <li><b>Online:</b> combat starts when every player is ready or the timer runs out. The host's tab runs the game, so the host should keep it open.</li>
         <li><b>Gold:</b> 5 per round, plus 1 interest per 10 gold held (max 5), plus win/loss streak bonuses.</li>
         <li>Shortcuts: <kbd>D</kbd> reroll, <kbd>F</kbd> buy XP, <kbd>E</kbd> sell hovered unit, <kbd>Space</kbd> ready, right-click to sell. Drag a unit onto the shop to sell it.</li>
       </ul>
@@ -77,12 +78,11 @@
     </div>
   </div>
 
-  <div id="overlay" data-mode="start">
+  <div id="overlay" data-mode="menu">
     <div class="panel">
       <h1>⬢ Hex Arena</h1>
-      <p class="big">Draft a team, build synergies, and outlast seven bots.</p>
-      <p class="muted">Buy units, drag them onto the board, combine three copies to star them up, then watch them fight.</p>
-      <button id="startBtn" class="primary">Start game</button>
+      <p class="muted">Loading…</p>
+      <noscript><p>Hex Arena needs JavaScript enabled.</p></noscript>
     </div>
   </div>
 

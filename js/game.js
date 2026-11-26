@@ -1,9 +1,11 @@
 // Game state: players, economy, shop, shared pool, rounds and bot opponents.
+// The Game is authoritative and runs only on the host (or in solo play).
+// Clients receive per-player snapshots from viewFor() and send actions to dispatch().
 
 import {
   UNITS, POOL_SIZE, SHOP_ODDS, XP_TO_LEVEL, MAX_LEVEL, isPveRound, creepWave,
 } from './data.js';
-import { Combat, STEP, countTraits } from './combat.js';
+import { Combat, countTraits, randomSeed } from './combat.js';
 
 export const BOARD_W = 7;
 export const BOARD_H = 4;
@@ -11,9 +13,12 @@ export const BENCH_SIZE = 9;
 export const SHOP_SIZE = 5;
 export const REROLL_COST = 2;
 export const XP_COST = 4;
+export const MAX_PLAYERS = 8;
 const PLANNING_TIME = 30;
+const POST_COMBAT = 1.2;
+const RESULTS_TIME = 2.5;
 
-const BOT_NAMES = ['Ember Bot', 'Tidal Bot', 'Grove Bot', 'Storm Bot', 'Void Bot', 'Iron Bot', 'Arcane Bot'];
+const BOT_NAMES = ['Ember Bot', 'Tidal Bot', 'Grove Bot', 'Storm Bot', 'Void Bot', 'Iron Bot', 'Arcane Bot', 'Rune Bot'];
 
 let UID = 1;
 const makeInst = (key, star = 1) => ({ uid: UID++, key, star });
@@ -27,75 +32,171 @@ function shuffle(a) {
   return a;
 }
 
+// ------------------------------------------------------------ pure helpers
+// These work on a plain player object, so clients can use them on snapshots.
+
+export const emptyBoard = () => Array.from({ length: BOARD_H }, () => Array(BOARD_W).fill(null));
+
 export function sellValue(u) {
   return UNITS[u.key].cost * Math.pow(3, u.star - 1);
+}
+
+export function validLoc(loc) {
+  if (!loc || typeof loc !== 'object') return false;
+  if (loc.area === 'bench') return Number.isInteger(loc.i) && loc.i >= 0 && loc.i < BENCH_SIZE;
+  if (loc.area === 'board') {
+    return Number.isInteger(loc.x) && Number.isInteger(loc.y)
+      && loc.x >= 0 && loc.x < BOARD_W && loc.y >= 0 && loc.y < BOARD_H;
+  }
+  return false;
+}
+
+export function getAt(p, loc) {
+  return loc.area === 'board' ? p.board[loc.y][loc.x] : p.bench[loc.i];
+}
+
+export function setAt(p, loc, u) {
+  if (loc.area === 'board') p.board[loc.y][loc.x] = u;
+  else p.bench[loc.i] = u;
+}
+
+export function boardUnits(p) {
+  const out = [];
+  for (let y = 0; y < BOARD_H; y++) {
+    for (let x = 0; x < BOARD_W; x++) if (p.board[y][x]) out.push({ unit: p.board[y][x], x, y });
+  }
+  return out;
+}
+
+export const boardCount = (p) => boardUnits(p).length;
+
+export function allUnits(p) {
+  const out = boardUnits(p).map((b) => ({ unit: b.unit, loc: { area: 'board', x: b.x, y: b.y } }));
+  p.bench.forEach((u, i) => { if (u) out.push({ unit: u, loc: { area: 'bench', i } }); });
+  return out;
+}
+
+export function findCopies(p, key, star, includeBoard) {
+  return allUnits(p).filter((l) => l.unit.key === key && l.unit.star === star
+    && (includeBoard || l.loc.area === 'bench'));
+}
+
+// Would buying this unit fit (free slot, or it completes a 3-of-a-kind)?
+export function canBuy(p, key, boardLocked) {
+  if (!key || p.gold < UNITS[key].cost) return false;
+  if (p.bench.includes(null)) return true;
+  return findCopies(p, key, 1, !boardLocked).length >= 2;
+}
+
+// Swap/move a unit. Pure so clients can apply it optimistically while dragging.
+export function moveUnit(p, from, to, boardLocked) {
+  if (!validLoc(from) || !validLoc(to)) return false;
+  if (from.area === to.area && from.x === to.x && from.y === to.y && from.i === to.i) return false;
+  if (boardLocked && (from.area === 'board' || to.area === 'board')) return false;
+  const a = getAt(p, from);
+  const b = getAt(p, to);
+  if (!a) return false;
+  if (to.area === 'board' && from.area === 'bench' && !b && boardCount(p) >= p.level) return false;
+  setAt(p, to, a);
+  setAt(p, from, b);
+  return true;
 }
 
 function newPlayer(id, name, isHuman) {
   return {
     id, name, isHuman,
     hp: 100, gold: 0, level: 1, xp: 0,
-    board: Array.from({ length: BOARD_H }, () => Array(BOARD_W).fill(null)),
+    board: emptyBoard(),
     bench: Array(BENCH_SIZE).fill(null),
-    shop: [], locked: false,
+    shop: [], locked: false, ready: false,
     streak: 0, alive: true, placement: 0, lastOpp: null,
   };
 }
 
+// ------------------------------------------------------------ game
 export class Game {
-  constructor({ humanIsBot = false } = {}) {
+  // humans: [{ name }] in player-id order (host first). Empty = bot-only sim.
+  constructor({ humans = [{ name: 'You' }] } = {}) {
     this.pool = {};
     for (const k in UNITS) this.pool[k] = POOL_SIZE[UNITS[k].cost];
-    this.players = [newPlayer(0, 'You', !humanIsBot)];
-    BOT_NAMES.forEach((n, i) => this.players.push(newPlayer(i + 1, n, false)));
-    this.human = this.players[0];
+    this.players = humans.slice(0, MAX_PLAYERS).map((h, i) => newPlayer(i, h.name, true));
+    let b = 0;
+    while (this.players.length < MAX_PLAYERS) {
+      this.players.push(newPlayer(this.players.length, BOT_NAMES[b++], false));
+    }
     this.round = 0;
     this.phase = 'planning'; // planning | combat | results | gameover
     this.timer = 0;
     this.speed = 1;
-    this.combat = null; // the human's visible combat
-    this.humanMatch = null;
     this.matches = [];
-    this.acc = 0;
+    this.combatClock = 0;
+    this.combatDur = 0;
     this.postCombat = 0;
-    this.lastResult = null;
     this.onChange = () => {};
-    this.onBanner = () => {};
+    this.onBanner = (_pid, _text, _kind) => {};
   }
 
   // ------------------------------------------------------------ helpers
   get boardLocked() { return this.phase !== 'planning'; }
 
   alivePlayers() { return this.players.filter((p) => p.alive); }
+  aliveHumans() { return this.players.filter((p) => p.alive && p.isHuman); }
 
-  getAt(p, loc) {
-    return loc.area === 'board' ? p.board[loc.y][loc.x] : p.bench[loc.i];
-  }
-
-  setAt(p, loc, u) {
-    if (loc.area === 'board') p.board[loc.y][loc.x] = u;
-    else p.bench[loc.i] = u;
-  }
-
-  boardUnits(p) {
-    const out = [];
-    for (let y = 0; y < BOARD_H; y++) {
-      for (let x = 0; x < BOARD_W; x++) if (p.board[y][x]) out.push({ unit: p.board[y][x], x, y });
-    }
-    return out;
-  }
-
-  boardCount(p) { return this.boardUnits(p).length; }
-
-  allUnits(p) {
-    const out = this.boardUnits(p).map((b) => ({ unit: b.unit, loc: { area: 'board', x: b.x, y: b.y } }));
-    p.bench.forEach((u, i) => { if (u) out.push({ unit: u, loc: { area: 'bench', i } }); });
-    return out;
-  }
+  getAt(p, loc) { return getAt(p, loc); }
+  setAt(p, loc, u) { setAt(p, loc, u); }
+  boardUnits(p) { return boardUnits(p); }
+  boardCount(p) { return boardCount(p); }
+  allUnits(p) { return allUnits(p); }
+  findCopies(p, key, star, includeBoard) { return findCopies(p, key, star, includeBoard); }
+  canBuy(p, key) { return canBuy(p, key, this.boardLocked); }
 
   xpNeeded(p) { return p.level >= MAX_LEVEL ? 0 : XP_TO_LEVEL[p.level]; }
 
   changed() { this.onChange(); }
+
+  banner(p, text, kind) {
+    if (p.isHuman) this.onBanner(p.id, text, kind);
+  }
+
+  // ------------------------------------------------------------ actions
+  // Entry point for player input, local or remote. Returns true if state changed.
+  dispatch(pid, a) {
+    const p = this.players[pid];
+    if (!p || !p.isHuman || !p.alive || !a || this.phase === 'gameover') return false;
+    switch (a.type) {
+      case 'buy': return Number.isInteger(a.i) && a.i >= 0 && a.i < SHOP_SIZE && this.buy(p, a.i);
+      case 'reroll': return this.reroll(p);
+      case 'xp': return this.buyXp(p);
+      case 'sell': return validLoc(a.loc) && this.sell(p, a.loc);
+      case 'move': {
+        const ok = moveUnit(p, a.from, a.to, this.boardLocked);
+        if (ok) this.changed();
+        return ok;
+      }
+      case 'lock': this.toggleLock(p); return true;
+      case 'ready': return this.setReady(p, a.ready !== false);
+      default: return false;
+    }
+  }
+
+  setReady(p, ready) {
+    if (this.phase !== 'planning') return false;
+    p.ready = ready;
+    this.changed();
+    return true;
+  }
+
+  // A remote player left: a bot takes over their seat.
+  dropPlayer(pid) {
+    const p = this.players[pid];
+    if (!p || !p.isHuman) return;
+    p.isHuman = false;
+    p.ready = false;
+    p.name = `${p.name} (left)`;
+    if (this.phase === 'planning' && p.alive) this.aiTurn(p);
+    this.checkGameOver();
+    this.changed();
+  }
 
   // ------------------------------------------------------------ shop & pool
   pickFromPool(level) {
@@ -129,36 +230,24 @@ export class Game {
     this.pool[u.key] += Math.pow(3, u.star - 1);
   }
 
-  findCopies(p, key, star, includeBoard) {
-    return this.allUnits(p).filter((l) => l.unit.key === key && l.unit.star === star
-      && (includeBoard || l.loc.area === 'bench'));
-  }
-
   combine(p, key) {
     let upgraded = false;
     for (let star = 1; star <= 2; star++) {
-      let copies = this.findCopies(p, key, star, !this.boardLocked);
+      let copies = findCopies(p, key, star, !this.boardLocked);
       while (copies.length >= 3) {
         const [keep, a, b] = copies;
-        this.setAt(p, a.loc, null);
-        this.setAt(p, b.loc, null);
-        this.setAt(p, keep.loc, makeInst(key, star + 1));
+        setAt(p, a.loc, null);
+        setAt(p, b.loc, null);
+        setAt(p, keep.loc, makeInst(key, star + 1));
         upgraded = true;
-        copies = this.findCopies(p, key, star, !this.boardLocked);
+        copies = findCopies(p, key, star, !this.boardLocked);
       }
     }
     return upgraded;
   }
 
   combineAll(p) {
-    for (const k of new Set(this.allUnits(p).map((l) => l.unit.key))) this.combine(p, k);
-  }
-
-  // Would buying this unit fit (free slot, or it completes a 3-of-a-kind)?
-  canBuy(p, key) {
-    if (!key || p.gold < UNITS[key].cost) return false;
-    if (p.bench.includes(null)) return true;
-    return this.findCopies(p, key, 1, !this.boardLocked).length >= 2;
+    for (const k of new Set(allUnits(p).map((l) => l.unit.key))) this.combine(p, k);
   }
 
   buy(p, i) {
@@ -180,8 +269,8 @@ export class Game {
         else { this.returnToPool(extra); p.gold += sellValue(extra); }
       }
     }
-    if (p.isHuman && up) this.onBanner('★ Star up!', 'star');
-    if (p.isHuman) this.changed();
+    if (up) this.banner(p, '★ Star up!', 'star');
+    this.changed();
     return true;
   }
 
@@ -189,7 +278,7 @@ export class Game {
     if (p.gold < REROLL_COST) return false;
     p.gold -= REROLL_COST;
     this.rollShop(p);
-    if (p.isHuman) this.changed();
+    this.changed();
     return true;
   }
 
@@ -197,7 +286,7 @@ export class Game {
     if (p.gold < XP_COST || p.level >= MAX_LEVEL) return false;
     p.gold -= XP_COST;
     this.addXp(p, 4);
-    if (p.isHuman) this.changed();
+    this.changed();
     return true;
   }
 
@@ -212,27 +301,20 @@ export class Game {
   }
 
   sell(p, loc) {
-    const u = this.getAt(p, loc);
+    const u = getAt(p, loc);
     if (!u) return false;
     if (loc.area === 'board' && this.boardLocked) return false;
     p.gold += sellValue(u);
     this.returnToPool(u);
-    this.setAt(p, loc, null);
-    if (p.isHuman) this.changed();
+    setAt(p, loc, null);
+    this.changed();
     return true;
   }
 
   moveUnit(p, from, to) {
-    if (from.area === to.area && from.x === to.x && from.y === to.y && from.i === to.i) return false;
-    if (this.boardLocked && (from.area === 'board' || to.area === 'board')) return false;
-    const a = this.getAt(p, from);
-    const b = this.getAt(p, to);
-    if (!a) return false;
-    if (to.area === 'board' && from.area === 'bench' && !b && this.boardCount(p) >= p.level) return false;
-    this.setAt(p, to, a);
-    this.setAt(p, from, b);
-    if (p.isHuman) this.changed();
-    return true;
+    const ok = moveUnit(p, from, to, this.boardLocked);
+    if (ok) this.changed();
+    return ok;
   }
 
   toggleLock(p) {
@@ -243,7 +325,7 @@ export class Game {
   // Fill empty board slots from the bench (used when the timer expires).
   autoFill(p) {
     const order = [3, 2, 4, 1, 5, 0, 6];
-    while (this.boardCount(p) < p.level) {
+    while (boardCount(p) < p.level) {
       let best = -1;
       p.bench.forEach((u, i) => {
         if (u && (best < 0 || sellValue(u) > sellValue(p.bench[best]))) best = i;
@@ -284,22 +366,23 @@ export class Game {
   nextRound() {
     this.round++;
     this.phase = 'planning';
+    this.matches = [];
     for (const p of this.alivePlayers()) {
       if (this.round > 1) {
         p.gold += this.income(p);
         this.addXp(p, 2);
       }
       if (!p.locked || !p.shop.length) this.rollShop(p);
+      p.ready = false;
       this.combineAll(p);
     }
     for (const p of this.alivePlayers()) if (!p.isHuman) this.aiTurn(p);
     this.timer = PLANNING_TIME;
-    this.combat = null;
     this.changed();
   }
 
   teamOf(p) {
-    return this.boardUnits(p).map((b) => ({ unit: { key: b.unit.key, star: b.unit.star }, x: b.x, y: b.y }));
+    return boardUnits(p).map((b) => ({ unit: { key: b.unit.key, star: b.unit.star }, x: b.x, y: b.y }));
   }
 
   makeMatches() {
@@ -324,30 +407,31 @@ export class Game {
     return out;
   }
 
+  // The match a player watches: the one they fight in (not one where they are only a ghost).
+  matchOf(p) {
+    return this.matches.find((m) => m.a === p || (m.b === p && !m.ghost)) || null;
+  }
+
   startCombat() {
     if (this.phase !== 'planning') return;
     for (const p of this.alivePlayers()) this.autoFill(p);
     this.phase = 'combat';
     this.matches = this.makeMatches();
-    this.humanMatch = null;
+    // Every fight is resolved here, instantly. Viewers replay it from (teams, seed).
+    let longest = 0;
     for (const m of this.matches) {
-      const teamB = m.pve ? creepWave(this.round) : this.teamOf(m.b);
-      const human = m.a === this.human || (m.b === this.human && !m.ghost);
-      // Keep the human on team A (bottom of the screen).
-      if (m.b === this.human && !m.ghost) {
-        [m.a, m.b] = [m.b, m.a];
-        m.combat = new Combat(this.teamOf(m.a), this.teamOf(m.b), { record: true });
-      } else {
-        m.combat = new Combat(this.teamOf(m.a), teamB, { record: human });
-      }
-      if (human && this.human.isHuman) this.humanMatch = m;
-      else m.combat.runToEnd();
+      m.teamA = this.teamOf(m.a);
+      m.teamB = m.pve ? creepWave(this.round) : this.teamOf(m.b);
+      m.seed = randomSeed();
+      m.combat = new Combat(m.teamA, m.teamB, { record: false, seed: m.seed }).runToEnd();
+      const watched = m.a.isHuman || (!m.ghost && m.b && m.b.isHuman);
+      if (watched) longest = Math.max(longest, m.combat.time);
     }
-    this.combat = this.humanMatch ? this.humanMatch.combat : null;
-    this.acc = 0;
-    this.postCombat = 1.2;
+    this.combatClock = 0;
+    this.combatDur = longest;
+    this.postCombat = POST_COMBAT;
     this.changed();
-    if (!this.combat) this.finishCombat();
+    if (!this.aliveHumans().length) this.finishCombat();
   }
 
   stageDamage() {
@@ -377,7 +461,6 @@ export class Game {
   }
 
   finishCombat() {
-    let humanMsg = null;
     for (const m of this.matches) {
       const c = m.combat;
       const w = c.winner;
@@ -386,13 +469,13 @@ export class Game {
         if (w === 'A') {
           p.gold += 2;
           const loot = this.pveLoot(p);
-          if (p === this.human) humanMsg = { text: `Victory! +2 gold, ${loot}`, kind: 'win' };
+          this.banner(p, `Victory! +2 gold, ${loot}`, 'win');
         } else {
           const dmg = 2 + this.survivorDamage(c, 'B');
           p.hp -= dmg;
           const kills = c.units.filter((u) => u.side === 'B' && !u.alive).length;
           p.gold += kills;
-          if (p === this.human) humanMsg = { text: `Defeat... -${dmg} HP (+${kills} gold)`, kind: 'loss' };
+          this.banner(p, `Defeat... -${dmg} HP (+${kills} gold)`, 'loss');
         }
         continue;
       }
@@ -403,12 +486,12 @@ export class Game {
         if (w === mine) {
           p.gold += 1;
           p.streak = p.streak > 0 ? p.streak + 1 : 1;
-          if (p === this.human) humanMsg = { text: 'Victory! +1 gold', kind: 'win' };
+          this.banner(p, 'Victory! +1 gold', 'win');
         } else {
           const dmg = this.stageDamage() + this.survivorDamage(c, theirs);
           p.hp -= dmg;
           p.streak = p.streak < 0 ? p.streak - 1 : -1;
-          if (p === this.human) humanMsg = { text: `${w === 'draw' ? 'Draw' : 'Defeat'}... -${dmg} HP`, kind: 'loss' };
+          this.banner(p, `${w === 'draw' ? 'Draw' : 'Defeat'}... -${dmg} HP`, 'loss');
         }
       }
     }
@@ -419,37 +502,37 @@ export class Game {
     for (const p of dead.slice().reverse()) {
       p.alive = false;
       p.placement = place--;
-      for (const l of this.allUnits(p)) this.returnToPool(l.unit);
-      p.board = Array.from({ length: BOARD_H }, () => Array(BOARD_W).fill(null));
+      for (const l of allUnits(p)) this.returnToPool(l.unit);
+      p.board = emptyBoard();
       p.bench = Array(BENCH_SIZE).fill(null);
     }
 
-    this.lastResult = humanMsg;
-    if (humanMsg) this.onBanner(humanMsg.text, humanMsg.kind);
-
-    const alive = this.alivePlayers();
-    if (!this.human.alive || alive.length <= 1) {
-      if (alive.length === 1) alive[0].placement = 1;
-      this.phase = 'gameover';
-      this.changed();
-      return;
-    }
+    if (this.checkGameOver()) return;
     this.phase = 'results';
-    this.timer = 2.5;
+    this.timer = RESULTS_TIME;
     this.changed();
+  }
+
+  // Ends the game when one player is left, or every human has been knocked out.
+  checkGameOver() {
+    const alive = this.alivePlayers();
+    const hadHumans = this.players.some((p) => p.isHuman);
+    if (alive.length > 1 && !(hadHumans && !this.aliveHumans().length)) return false;
+    // Rank the survivors by HP so every player gets a final placement.
+    alive.sort((a, b) => b.hp - a.hp).forEach((p, i) => { p.placement = i + 1; });
+    this.phase = 'gameover';
+    this.changed();
+    return true;
   }
 
   update(dt) {
     if (this.phase === 'planning') {
       this.timer -= dt;
-      if (this.timer <= 0) this.startCombat();
-    } else if (this.phase === 'combat' && this.combat) {
-      if (!this.combat.over) {
-        this.acc += dt * this.speed;
-        while (this.acc >= STEP && !this.combat.over) {
-          this.combat.step(STEP);
-          this.acc -= STEP;
-        }
+      const humans = this.aliveHumans();
+      if (this.timer <= 0 || (humans.length && humans.every((p) => p.ready))) this.startCombat();
+    } else if (this.phase === 'combat') {
+      if (this.combatClock < this.combatDur) {
+        this.combatClock += dt * this.speed;
       } else {
         this.postCombat -= dt;
         if (this.postCombat <= 0) this.finishCombat();
@@ -458,6 +541,40 @@ export class Game {
       this.timer -= dt;
       if (this.timer <= 0) this.nextRound();
     }
+  }
+
+  // ------------------------------------------------------------ snapshots
+  // Everything one player's screen needs, as plain JSON-safe data.
+  viewFor(pid) {
+    const me = this.players[pid];
+    const m = this.phase === 'combat' || this.phase === 'results' ? this.matchOf(me) : null;
+    let match = null;
+    if (m) {
+      const flip = m.b === me;
+      const opp = flip ? m.a : m.b;
+      match = {
+        seed: m.seed, teamA: m.teamA, teamB: m.teamB, flip,
+        pve: !!m.pve, ghost: !!m.ghost && !flip,
+        oppId: opp ? opp.id : -1, oppName: opp ? opp.name : 'Monsters',
+      };
+    }
+    return structuredClone({
+      pid,
+      round: this.round,
+      phase: this.phase,
+      timer: this.timer,
+      speed: this.speed,
+      me: {
+        id: me.id, name: me.name, hp: me.hp, gold: me.gold, level: me.level, xp: me.xp,
+        board: me.board, bench: me.bench, shop: me.shop, locked: me.locked, ready: me.ready,
+        streak: me.streak, alive: me.alive, placement: me.placement,
+      },
+      players: this.players.map((p) => ({
+        id: p.id, name: p.name, hp: p.hp, level: p.level, alive: p.alive,
+        placement: p.placement, isHuman: p.isHuman, ready: p.ready,
+      })),
+      match,
+    });
   }
 
   // ------------------------------------------------------------ bots
@@ -483,7 +600,7 @@ export class Game {
     for (let i = 0; i < SHOP_SIZE; i++) {
       const key = p.shop[i];
       if (!key) continue;
-      const owned = this.allUnits(p).map((l) => l.unit);
+      const owned = allUnits(p).map((l) => l.unit);
       const tc = countTraits(owned);
       const d = UNITS[key];
       const copies = owned.filter((u) => u.key === key).length;
@@ -509,13 +626,13 @@ export class Game {
 
   // Sell the least valuable bench units without pairs until `free` slots exist.
   aiTrimBench(p, free) {
-    const counts = countTraits(this.allUnits(p).map((l) => l.unit));
+    const counts = countTraits(allUnits(p).map((l) => l.unit));
     while (p.bench.filter((b) => !b).length < free) {
       let worst = -1;
       let wv = Infinity;
       p.bench.forEach((u, i) => {
         if (!u) return;
-        const pairs = this.allUnits(p).filter((l) => l.unit.key === u.key && l.unit.star === u.star).length;
+        const pairs = allUnits(p).filter((l) => l.unit.key === u.key && l.unit.star === u.star).length;
         const v = this.aiValue(p, u, counts) + (pairs >= 2 ? 6 : 0);
         if (v < wv) { wv = v; worst = i; }
       });
@@ -525,8 +642,8 @@ export class Game {
   }
 
   aiArrange(p) {
-    const units = this.allUnits(p).map((l) => l.unit);
-    p.board = Array.from({ length: BOARD_H }, () => Array(BOARD_W).fill(null));
+    const units = allUnits(p).map((l) => l.unit);
+    p.board = emptyBoard();
     p.bench = Array(BENCH_SIZE).fill(null);
     const counts = countTraits(units);
     units.sort((a, b) => this.aiValue(p, b, counts) - this.aiValue(p, a, counts));

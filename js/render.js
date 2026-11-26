@@ -3,7 +3,7 @@
 import { COLS, ROWS } from './hex.js';
 import { COST_COLORS } from './data.js';
 import { getDef } from './combat.js';
-import { BENCH_SIZE } from './game.js';
+import { BENCH_SIZE, boardUnits } from './game.js';
 
 const SQ3 = Math.sqrt(3);
 export const R = 36;
@@ -49,6 +49,7 @@ export class Renderer {
     this.flash = new Map();
     this.byId = new Map();
     this.combat = null;
+    this.flip = false; // true when the viewer is team B: mirror the arena so they sit at the bottom
     this.drag = null; // { from, unit, x, y }
     this.pointer = null;
     this.resize();
@@ -85,8 +86,21 @@ export class Renderer {
     return best;
   }
 
-  setCombat(c) {
+  // Combat cell -> screen position, mirrored for team B viewers.
+  cc(col, row) {
+    return this.flip ? cellCenter(COLS - 1 - col, ROWS - 1 - row) : cellCenter(col, row);
+  }
+
+  // Screen cell -> combat cell (the mirror is its own inverse).
+  toSim(col, row) {
+    return this.flip ? { col: COLS - 1 - col, row: ROWS - 1 - row } : { col, row };
+  }
+
+  get mySide() { return this.flip ? 'B' : 'A'; }
+
+  setCombat(c, flip = false) {
     this.combat = c;
+    this.flip = flip;
     this.effects = [];
     this.lunges.clear();
     this.flash.clear();
@@ -94,8 +108,8 @@ export class Renderer {
   }
 
   unitPos(u) {
-    const a = cellCenter(u.prevCol, u.prevRow);
-    const b = cellCenter(u.col, u.row);
+    const a = this.cc(u.prevCol, u.prevRow);
+    const b = this.cc(u.col, u.row);
     const t = u.moving ? u.moveT : 1;
     let x = a.x + (b.x - a.x) * t;
     let y = a.y + (b.y - a.y) * t;
@@ -104,7 +118,7 @@ export class Renderer {
       const k = Math.sin(Math.min(1, l.t / l.life) * Math.PI) * 9;
       const tg = this.byId.get(l.to);
       if (tg) {
-        const p = cellCenter(tg.col, tg.row);
+        const p = this.cc(tg.col, tg.row);
         const d = Math.hypot(p.x - x, p.y - y) || 1;
         x += (p.x - x) / d * k;
         y += (p.y - y) / d * k;
@@ -121,7 +135,7 @@ export class Renderer {
       switch (e.type) {
         case 'attack': {
           const from = this.byId.get(e.from);
-          if (e.ranged) this.effects.push({ type: 'proj', from: this.unitPos(from), to: e.to, t: -e.delay, life: 0.18, color: from.side === 'A' ? '#ffe28a' : '#ff9a8a' });
+          if (e.ranged) this.effects.push({ type: 'proj', from: this.unitPos(from), to: e.to, t: -e.delay, life: 0.18, color: from.side === this.mySide ? '#ffe28a' : '#ff9a8a' });
           else this.lunges.set(e.from, { to: e.to, t: 0, life: 0.18 });
           break;
         }
@@ -153,7 +167,7 @@ export class Renderer {
         case 'stun':
           break;
         case 'aoe': {
-          const p = cellCenter(e.col, e.row);
+          const p = this.cc(e.col, e.row);
           this.effects.push({ type: 'aoe', x: p.x, y: p.y, r: (e.radius + 0.5) * HW, t: 0, life: 0.45, color: KIND_COLORS[e.kind] || '#fff' });
           break;
         }
@@ -163,8 +177,8 @@ export class Renderer {
           break;
         }
         case 'blink': {
-          const a = cellCenter(e.fromCol, e.fromRow);
-          const b = cellCenter(e.toCol, e.toRow);
+          const a = this.cc(e.fromCol, e.fromRow);
+          const b = this.cc(e.toCol, e.toRow);
           this.effects.push({ type: 'line', a, b, t: 0, life: 0.3, color: '#b98bff' });
           break;
         }
@@ -180,8 +194,9 @@ export class Renderer {
     c.events.length = 0;
   }
 
-  drawBoard(game) {
+  drawBoard(view) {
     const ctx = this.ctx;
+    const locked = view.phase !== 'planning';
     const dragging = !!this.drag;
     const hov = dragging && this.pointer ? this.pick(this.pointer.x, this.pointer.y) : null;
     for (let row = 0; row < ROWS; row++) {
@@ -190,8 +205,8 @@ export class Renderer {
         const mine = row >= 4;
         hexPath(ctx, x, y, R - 2);
         ctx.fillStyle = mine ? '#1d2a40' : '#2b1f33';
-        if (dragging && mine && !game.boardLocked) ctx.fillStyle = '#23365a';
-        if (hov && hov.area === 'board' && hov.col === col && hov.row === row && mine && !game.boardLocked) ctx.fillStyle = '#35548a';
+        if (dragging && mine && !locked) ctx.fillStyle = '#23365a';
+        if (hov && hov.area === 'board' && hov.col === col && hov.row === row && mine && !locked) ctx.fillStyle = '#35548a';
         ctx.fill();
         ctx.strokeStyle = mine ? '#34507a' : '#4a3157';
         ctx.lineWidth = 1.5;
@@ -277,11 +292,11 @@ export class Renderer {
     ctx.restore();
   }
 
-  drawPlanningUnits(game) {
-    const p = game.human;
+  drawPlanningUnits(view) {
+    const p = view.me;
     const dragUid = this.drag ? this.drag.unit.uid : null;
     if (!this.combat) {
-      for (const b of game.boardUnits(p)) {
+      for (const b of boardUnits(p)) {
         if (b.unit.uid === dragUid) continue;
         const c = cellCenter(b.x, 4 + b.y);
         this.drawUnit(c.x, c.y, { key: b.unit.key, star: b.unit.star, side: 'A' });
@@ -302,7 +317,7 @@ export class Renderer {
     for (const { u, p } of list) {
       const f = this.flash.get(u.id) || 0;
       this.drawUnit(p.x, p.y, {
-        key: u.key, star: u.star, side: u.side, creep: !u.def.traits.length,
+        key: u.key, star: u.star, side: u.side === this.mySide ? 'A' : 'B', creep: !u.def.traits.length,
         hpFrac: u.hp / u.maxHp, shieldFrac: u.shield / u.maxHp,
         manaFrac: u.maxMana ? u.mana / u.maxMana : undefined,
         stunned: u.stun > 0, flash: f > 0,
@@ -407,18 +422,20 @@ export class Renderer {
     this.effects = keep;
   }
 
-  draw(game, dt) {
+  // view: the player's snapshot. replay: { combat, flip } for the fight being watched, or null.
+  draw(view, replay, dt) {
     const ctx = this.ctx;
-    if (game.combat !== this.combat) this.setCombat(game.combat);
-    const cdt = this.combat && !this.combat.over ? dt * game.speed : dt;
+    const c = replay ? replay.combat : null;
+    if (c !== this.combat) this.setCombat(c, replay ? replay.flip : false);
+    const cdt = this.combat && !this.combat.over ? dt * view.speed : dt;
     ctx.clearRect(0, 0, W, H);
-    this.drawBoard(game);
+    this.drawBoard(view);
     this.processEvents();
     this.drawCombatUnits(cdt);
-    this.drawPlanningUnits(game);
+    this.drawPlanningUnits(view);
     this.drawEffects(cdt);
 
-    if (game.phase === 'planning') {
+    if (view.phase === 'planning') {
       ctx.font = 'bold 13px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,255,255,0.25)';
