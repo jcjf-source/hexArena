@@ -7,8 +7,12 @@ import {
 } from './data.js';
 import { Combat, countTraits, activeTiers, randomSeed } from './combat.js';
 import {
-  AUGMENTS, AUGMENT_ROUNDS, AUGMENT_EXTRA_TIME, has, combatMods, traitBonus, rollChoices,
+  AUGMENTS, AUGMENT_ROUNDS, AUGMENT_EXTRA_TIME, has, combatMods, mergeMods, traitBonus, rollChoices,
 } from './augments.js';
+import {
+  rollRule, ruleName, ruleIcon, ruleEcon, ruleMods, ruleTraitBonus, terrainTiles, terrainShiftEvery,
+} from './rules.js';
+import { makeTerrain, terrainAt } from './terrain.js';
 
 export const BOARD_W = 7;
 export const BOARD_H = 4;
@@ -151,7 +155,12 @@ function newPlayer(id, name, isHuman) {
 // ------------------------------------------------------------ game
 export class Game {
   // humans: [{ name }] in player-id order (host first). Empty = bot-only sim.
-  constructor({ humans = [{ name: 'You' }] } = {}) {
+  // rule: { id, trait? } from rules.js; rolled at random when not given.
+  constructor({ humans = [{ name: 'You' }], rule = null } = {}) {
+    this.rule = rule || rollRule();
+    this.terrainSeed = randomSeed();
+    this.terrainEpoch = -1;
+    this.terrain = [];
     this.pool = {};
     for (const k in UNITS) this.pool[k] = POOL_SIZE[UNITS[k].cost];
     this.players = humans.slice(0, MAX_PLAYERS).map((h, i) => newPlayer(i, h.name, true));
@@ -186,6 +195,8 @@ export class Game {
   allUnits(p) { return allUnits(p); }
   findCopies(p, key, star, includeBoard) { return findCopies(p, key, star, includeBoard); }
   canBuy(p, key) { return canBuy(p, key, this.boardLocked); }
+
+  rerollCost() { return ruleEcon(this.rule, 'rerollCost', REROLL_COST); }
 
   xpNeeded(p) { return p.level >= MAX_LEVEL ? 0 : XP_TO_LEVEL[p.level]; }
 
@@ -325,13 +336,13 @@ export class Game {
   }
 
   shopSize(p) {
-    return SHOP_SIZE + (has(p.augments, 'recruiter') ? 1 : 0);
+    return SHOP_SIZE + (has(p.augments, 'recruiter') ? 1 : 0) + ruleEcon(this.rule, 'shopBonus', 0);
   }
 
   reroll(p) {
     if (p.freeReroll) p.freeReroll = false;
-    else if (p.gold < REROLL_COST) return false;
-    else p.gold -= REROLL_COST;
+    else if (p.gold < this.rerollCost()) return false;
+    else p.gold -= this.rerollCost();
     this.rollShop(p);
     this.changed();
     return true;
@@ -384,9 +395,14 @@ export class Game {
     this.pickAugment(p, best);
   }
 
-  // Active traits for a player's team, including crests.
+  // Active traits for a player's team, including crests and the arena rule.
   tiersFor(p, team) {
-    return activeTiers(team.map((s) => s.unit), traitBonus(p.augments));
+    return activeTiers(team.map((s) => s.unit), traitBonus(p.augments, ruleTraitBonus(this.rule)));
+  }
+
+  // A player's combat modifiers: their augments plus the arena rule.
+  modsFor(p) {
+    return mergeMods(combatMods(p.augments), ruleMods(this.rule));
   }
 
   buyXp(p) {
@@ -454,6 +470,7 @@ export class Game {
 
   // ------------------------------------------------------------ flow
   start() {
+    for (const p of this.players) this.banner(p, `${ruleIcon(this.rule)} Arena rule: ${ruleName(this.rule)}`, 'star');
     for (const p of this.players) {
       p.gold = 4;
       const key = this.pickFromPool(1);
@@ -464,10 +481,11 @@ export class Game {
   }
 
   income(p) {
-    const interest = Math.min(has(p.augments, 'richer') ? 7 : 5, Math.floor(p.gold / 10));
+    const cap = ruleEcon(this.rule, 'interestCap', 5) + (has(p.augments, 'richer') ? 2 : 0);
+    const interest = Math.min(cap, Math.floor(p.gold / 10));
     const s = Math.abs(p.streak);
     const streak = s >= 5 ? 3 : s >= 4 ? 2 : s >= 2 ? 1 : 0;
-    return 5 + interest + streak + (has(p.augments, 'salary') ? 2 : 0);
+    return 5 + interest + streak + (has(p.augments, 'salary') ? 2 : 0) + ruleEcon(this.rule, 'goldBonus', 0);
   }
 
   nextRound() {
@@ -475,10 +493,11 @@ export class Game {
     this.phase = 'planning';
     this.matches = [];
     const augRound = AUGMENT_ROUNDS.includes(this.round);
+    this.updateTerrain();
     for (const p of this.alivePlayers()) {
       if (this.round > 1) {
         p.gold += this.income(p);
-        this.addXp(p, has(p.augments, 'learner') ? 4 : 2);
+        this.addXp(p, (has(p.augments, 'learner') ? 4 : 2) + ruleEcon(this.rule, 'xpBonus', 0));
       }
       if (!p.locked || !p.shop.length) this.rollShop(p);
       p.ready = false;
@@ -491,6 +510,15 @@ export class Game {
     }
     this.timer = PLANNING_TIME + (augRound ? AUGMENT_EXTRA_TIME : 0);
     this.changed();
+  }
+
+  // A new terrain layout every few rounds (every round under Shifting Sands).
+  updateTerrain() {
+    const epoch = Math.floor((this.round - 1) / terrainShiftEvery(this.rule));
+    if (epoch === this.terrainEpoch) return;
+    this.terrainEpoch = epoch;
+    this.terrain = makeTerrain((this.terrainSeed + epoch * 0x9E3779B1) >>> 0, terrainTiles(this.rule));
+    if (this.round > 1) for (const p of this.alivePlayers()) this.banner(p, '🗺️ The arena shifts!', 'star');
   }
 
   teamOf(p) {
@@ -592,9 +620,10 @@ export class Game {
       m.opts = {
         seed: m.seed,
         tiersA: this.tiersFor(m.a, m.teamA),
-        modsA: combatMods(m.a.augments),
+        modsA: this.modsFor(m.a),
         tiersB: m.pve ? null : this.tiersFor(m.b, m.teamB),
-        modsB: m.pve ? null : combatMods(m.b.augments),
+        modsB: m.pve ? null : this.modsFor(m.b),
+        terrain: this.terrain,
       };
       m.combat = new Combat(m.teamA, m.teamB, { ...m.opts, record: false }).runToEnd();
       const watched = m.a.isHuman || (!m.ghost && m.b && m.b.isHuman);
@@ -618,6 +647,7 @@ export class Game {
 
   // Applies a lost fight's damage to a player; returns the damage actually taken.
   takeDamage(p, dmg) {
+    dmg = Math.ceil(dmg * (1 + ruleEcon(this.rule, 'dmgPct', 0) / 100));
     if (has(p.augments, 'thickskin')) dmg = Math.ceil(dmg * 0.7);
     p.hp -= dmg;
     if (has(p.augments, 'underdog')) p.gold += 2;
@@ -744,6 +774,8 @@ export class Game {
       phase: this.phase,
       timer: this.timer,
       speed: this.speed,
+      rule: this.rule,
+      terrain: this.terrain,
       me: {
         id: me.id, name: me.name, hp: me.hp, gold: me.gold, level: me.level, xp: me.xp,
         board: me.board, bench: me.bench, shop: me.shop, locked: me.locked, ready: me.ready,
@@ -769,7 +801,7 @@ export class Game {
     while (p.level < targetLevel && p.gold >= XP_COST && p.gold - XP_COST >= reserve * 0.5) this.buyXp(p);
     this.aiShop(p, reserve);
     const maxRolls = r < 6 ? 0 : p.hp < 40 ? 12 : r >= 18 ? 8 : 2;
-    for (let rolls = 0; rolls < maxRolls && p.gold - REROLL_COST >= reserve; rolls++) {
+    for (let rolls = 0; rolls < maxRolls && p.gold - this.rerollCost() >= reserve; rolls++) {
       this.reroll(p);
       this.aiShop(p, reserve);
     }
@@ -837,6 +869,13 @@ export class Game {
     const ranged = onBoard.filter((u) => UNITS[u.key].range > 1);
     melee.forEach((u, i) => { p.board[i < 7 ? 0 : 1][order[i % 7]] = u; });
     ranged.forEach((u, i) => { p.board[i < 7 ? 3 : 2][order[i % 7]] = u; });
+    // Slide a unit from the same row onto each empty terrain hex.
+    for (const t of this.terrain) {
+      const row = p.board[t.y];
+      if (row[t.x]) continue;
+      const from = row.findIndex((u, x) => u && !terrainAt(this.terrain, x, t.y));
+      if (from >= 0) { row[t.x] = row[from]; row[from] = null; }
+    }
 
     rest.forEach((u, i) => {
       if (i < BENCH_SIZE) p.bench[i] = u;

@@ -49,9 +49,13 @@ export const has = (ids, id) => !!ids && ids.includes(id);
 
 // Combined combat modifiers for a player's augments (numbers add up).
 export function combatMods(ids) {
+  return mergeMods(...(ids || []).map((id) => AUGMENTS[id]?.mods));
+}
+
+// Adds mod objects together (null entries are skipped). Returns null if empty.
+export function mergeMods(...list) {
   const out = {};
-  for (const id of ids || []) {
-    const m = AUGMENTS[id]?.mods;
+  for (const m of list) {
     if (!m) continue;
     for (const k in m) {
       if (k === 'traitBoost') {
@@ -65,9 +69,9 @@ export function combatMods(ids) {
   return Object.keys(out).length ? out : null;
 }
 
-// Extra trait counts from crests: { trait: n }.
-export function traitBonus(ids) {
-  const out = {};
+// Extra trait counts from crests: { trait: n }. `extra` (e.g. the arena rule's) is added on top.
+export function traitBonus(ids, extra = null) {
+  const out = { ...(extra || {}) };
   for (const id of ids || []) {
     const t = AUGMENTS[id]?.crest;
     if (t) out[t] = (out[t] || 0) + 1;

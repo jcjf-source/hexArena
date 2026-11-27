@@ -7,6 +7,11 @@ import { COLS, hexDist, neighbors, cellKey } from './hex.js';
 export const MAX_TIME = 40; // seconds before a fight is declared a draw
 export const STEP = 1 / 30;
 const MOVE_TIME = 0.38; // seconds to move one hex
+// Terrain tuning (see terrain.js for the tile list).
+const SPRING_HEAL = 0.04; // fraction of max HP per second
+const WELL_MANA = 8; // mana per second
+const COVER_REDUCTION = 0.2;
+const BANNER_AS = 0.25;
 let NEXT_ID = 1;
 
 // Small seeded PRNG so every client can replay an identical fight from a seed.
@@ -104,6 +109,7 @@ function makeUnit(u, side, col, row, tiers, rng) {
 // Team-wide modifiers from augments. y is the unit's board row (0 = front, 3 = back).
 function applyMods(cu, m, y) {
   if (!m) return;
+  if (m.manaCostPct && cu.maxMana) cu.maxMana = Math.max(10, Math.round(cu.maxMana * (1 + m.manaCostPct / 100)));
   if (m.hpPct) cu.maxHp *= 1 + m.hpPct / 100;
   if (m.dmgPct) cu.dmgAmp += m.dmgPct / 100;
   if (m.asPct) cu.as *= 1 + m.asPct / 100;
@@ -133,9 +139,15 @@ export class Combat {
   // (x 0..6, y 0 = front row .. 3 = back row). Team A is drawn at the bottom.
   // tiersA / tiersB override each side's active traits ({ trait: tierIndex }).
   // modsA / modsB are team-wide augment modifiers (see applyMods).
+  // terrain: [{ x, y, type }] in board coords, applied to both halves (mirrored for team B).
   constructor(teamA, teamB, {
-    record = true, seed = randomSeed(), tiersA = null, tiersB = null, modsA = null, modsB = null,
+    record = true, seed = randomSeed(), tiersA = null, tiersB = null, modsA = null, modsB = null, terrain = null,
   } = {}) {
+    this.terrain = new Map();
+    for (const t of terrain || []) {
+      this.terrain.set(cellKey(t.x, 4 + t.y), t.type);
+      this.terrain.set(cellKey(COLS - 1 - t.x, 3 - t.y), t.type);
+    }
     this.seed = seed;
     this.rng = mulberry32(seed);
     this.units = [];
@@ -205,7 +217,19 @@ export class Combat {
     }
   }
 
+  tileOf(u) {
+    return this.terrain.get(cellKey(u.col, u.row));
+  }
+
+  // High ground gives ranged units +1 range.
+  rangeOf(u, tile) {
+    return u.range + (tile === 'high' && u.range > 1 ? 1 : 0);
+  }
+
   updateUnit(u, dt) {
+    const tile = this.terrain.size ? this.tileOf(u) : undefined;
+    if (tile === 'spring' && u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + u.maxHp * SPRING_HEAL * dt);
+    if (tile === 'well' && u.maxMana > 0) u.mana = Math.min(u.maxMana, u.mana + WELL_MANA * dt);
     if (u.shieldTime > 0) {
       u.shieldTime -= dt;
       if (u.shieldTime <= 0) u.shield = 0;
@@ -219,12 +243,13 @@ export class Combat {
     if (u.stun > 0) { u.stun -= dt; return; }
     u.cd -= dt;
 
-    if (!u.target || !u.target.alive || dist(u, u.target) > u.range) {
+    const range = this.rangeOf(u, tile);
+    if (!u.target || !u.target.alive || dist(u, u.target) > range) {
       u.target = this.nearestEnemy(u);
       if (!u.target) return;
     }
 
-    if (dist(u, u.target) <= u.range) {
+    if (dist(u, u.target) <= range) {
       if (u.maxMana > 0 && u.mana >= u.maxMana) {
         u.mana = 0;
         this.cast(u);
@@ -233,7 +258,7 @@ export class Combat {
       }
       if (u.cd <= 0) {
         this.attack(u, u.target);
-        u.cd = 1 / u.as;
+        u.cd = 1 / (u.as * (tile === 'banner' ? 1 + BANNER_AS : 1));
       }
     } else {
       this.moveToward(u, u.target);
@@ -289,6 +314,7 @@ export class Combat {
     const pre = amount * src.dmgAmp;
     const resist = kind === 'phys' ? t.armor : t.mr;
     let dealt = pre * 100 / (100 + Math.max(0, resist));
+    if (this.terrain.size && this.tileOf(t) === 'cover') dealt *= 1 - COVER_REDUCTION;
     if (t.maxMana > 0) t.mana = Math.min(t.maxMana, t.mana + Math.min(pre * 0.05, 12));
     if (t.shield > 0) {
       const ab = Math.min(t.shield, dealt);

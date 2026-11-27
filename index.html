@@ -21,12 +21,15 @@
       <div class="top-actions">
         <button id="readyBtn" title="Start combat (Space)">Ready ▶</button>
         <button id="speedBtn" title="Combat speed">1x</button>
+        <button id="muteBtn" title="Sound on/off">🔊</button>
         <button id="helpBtn" title="How to play">?</button>
       </div>
     </header>
 
     <main>
       <aside id="left">
+        <h3>Arena</h3>
+        <div id="arena"></div>
         <div id="augSection" class="hidden">
           <h3>Augments</h3>
           <div id="augList"></div>
@@ -80,6 +83,8 @@
         <li>Losing a fight costs HP. The last player standing wins.</li>
         <li><b>Augments:</b> at rounds 3, 10 and 17 you pick one of three upgrades that last the whole game: economy boosts, team-wide combat bonuses, or a <b>crest</b> that counts as an extra unit of a trait you already have.</li>
         <li><b>Online:</b> combat starts when every player is ready or the timer runs out. The host's tab runs the game, so the host should keep it open.</li>
+        <li><b>Arena rule:</b> every game rolls one rule that applies to everyone, such as cheaper abilities, a richer economy or an empowered trait. It's shown in the Arena panel.</li>
+        <li><b>Terrain:</b> a few hexes on each half give a bonus to the unit standing on them (hover one to see what it does). Both sides get the same layout, mirrored, and it changes every few rounds.</li>
         <li><b>Gold:</b> 5 per round, plus 1 interest per 10 gold held (max 5), plus win/loss streak bonuses.</li>
         <li>Shortcuts: <kbd>D</kbd> reroll, <kbd>F</kbd> buy XP, <kbd>E</kbd> sell hovered unit, <kbd>Space</kbd> ready, right-click to sell. Drag a unit onto the shop to sell it.</li>
       </ul>

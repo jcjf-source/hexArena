@@ -7,7 +7,7 @@
 import { Game, MAX_PLAYERS, moveUnit } from './game.js';
 import { makeCode, openHostPeer, joinRoom } from './net.js';
 
-const PROTOCOL = 1;
+const PROTOCOL = 2; // bump when the snapshot or fight replay format changes
 const SYNC_EVERY = 1; // seconds between unprompted snapshot refreshes
 
 export function cleanName(s, fallback = 'Player') {

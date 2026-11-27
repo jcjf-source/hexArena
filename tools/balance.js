@@ -19,6 +19,7 @@ import { UNITS, TRAITS } from '../js/data.js';
 import { Combat, activeTiers } from '../js/combat.js';
 import { Game } from '../js/game.js';
 import { AUGMENTS, traitBonus } from '../js/augments.js';
+import { ruleTraitBonus } from '../js/rules.js';
 
 const args = process.argv.slice(2);
 const quick = args.includes('--quick');
@@ -325,7 +326,7 @@ function botGames() {
         const s = augStat[id];
         s.n++; s.place += place; s.top4 += place <= 4 ? 1 : 0;
       }
-      for (const [t, tier] of Object.entries(activeTiers(team, traitBonus(p.augments)))) {
+      for (const [t, tier] of Object.entries(activeTiers(team, traitBonus(p.augments, ruleTraitBonus(game.rule))))) {
         const key = `${t}:${tier}`;
         const s = (traitStat[key] ||= { n: 0, place: 0, top4: 0 });
         s.n++; s.place += place; s.top4 += place <= 4 ? 1 : 0;
