@@ -81,7 +81,7 @@ function makeUnit(u, side, col, row, tiers, rng) {
   const def = getDef(u.key);
   const m = STAR_MULT[u.star - 1] * (u.scale || 1);
   const cu = {
-    id: NEXT_ID++, key: u.key, def, star: u.star, side,
+    id: NEXT_ID++, key: u.key, def, star: u.star, scale: u.scale || 1, side,
     col, row, prevCol: col, prevRow: row, moving: false, moveT: 1,
     maxHp: def.hp * m, hp: 0, ad: def.ad * m, as: def.as, range: def.range,
     armor: def.armor, mr: def.mr,
@@ -89,6 +89,7 @@ function makeUnit(u, side, col, row, tiers, rng) {
     ap: 100, crit: 0.1, critDmg: 1.5, dmgAmp: 1, regen: 0, doubleChance: 0,
     shield: 0, shieldTime: 0, stun: 0, cd: 0.15 + rng() * 0.35,
     target: null, alive: true, ability: def.ability, dealt: 0,
+    rebirth: def.passive?.type === 'rebirth' ? def.passive : null, reborn: false,
   };
   const has = (t) => def.traits.includes(t) && tiers[t] !== undefined;
   const val = (t) => TRAITS[t].values[tiers[t]];
@@ -102,6 +103,7 @@ function makeUnit(u, side, col, row, tiers, rng) {
   if (has('ranger')) cu.doubleChance = val('ranger') / 100;
   if (has('arcanist')) cu.ap += val('arcanist');
   if (tiers.mystic !== undefined) cu.mr += TRAITS.mystic.values[tiers.mystic];
+  if (def.mythic) cu.ap *= u.scale || 1; // mythic power scales its spells too
   cu.mana = Math.min(cu.mana, cu.maxMana);
   cu.hp = cu.maxHp;
   return cu;
@@ -327,12 +329,27 @@ export class Combat {
     src.dealt += dealt;
     if (src.lifesteal && src.alive) src.hp = Math.min(src.maxHp, src.hp + dealt * src.lifesteal);
     this.emit({ type: 'dmg', unit: t.id, amount: Math.round(dealt), crit, kind });
+    if (t.hp <= 0 && t.rebirth && !t.reborn) {
+      this.rebirth(t);
+      return;
+    }
     if (t.hp <= 0) {
       t.hp = 0;
       t.alive = false;
       this.grid.delete(cellKey(t.col, t.row));
       this.emit({ type: 'death', unit: t.id });
     }
+  }
+
+  // Mythic passive: revive once per fight and explode.
+  rebirth(u) {
+    const p = u.rebirth;
+    u.reborn = true;
+    u.hp = u.maxHp * p.hpPct / 100;
+    u.stun = 0;
+    this.emit({ type: 'rebirth', unit: u.id });
+    this.emit({ type: 'aoe', col: u.col, row: u.row, radius: p.radius, kind: 'magic' });
+    for (const e of this.enemiesOf(u)) if (dist(u, e) <= p.radius) this.damage(u, e, p.dmg * u.ap / 100, 'magic');
   }
 
   heal(u, amount) {

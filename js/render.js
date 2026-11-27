@@ -358,6 +358,16 @@ export class Renderer {
           this.burst(b.x, b.y, { n: 10, color: '#b98bff', speed: 80, life: 0.4, size: 2.5 });
           break;
         }
+        case 'rebirth': {
+          const p = this.unitPos(u);
+          this.effects.push({ type: 'text', x: p.x, y: p.y - 46, text: 'REBORN!', color: '#ff6a4a', size: 18, t: 0, life: 1.4, bold: true, pop: true });
+          this.effects.push({ type: 'ring', unit: e.unit, t: 0, life: 0.8, color: '#ff3b3b', width: 5 });
+          this.effects.push({ type: 'shock', x: p.x, y: p.y, r: 140, t: 0, life: 0.7, color: '#ff7a3d' });
+          this.burst(p.x, p.y, { n: 50, color: '#ff4a2a', speed: 200, life: 1, size: 3.5, gravity: -40 });
+          this.burst(p.x, p.y, { n: 25, color: '#ffd84a', speed: 120, life: 0.8, size: 2.5, up: 60 });
+          this.addShake(9);
+          break;
+        }
         case 'death': {
           const p = this.unitPos(u);
           const col = unitColor(u.def);
@@ -462,8 +472,11 @@ export class Renderer {
     ctx.fillStyle = `rgba(0,0,0,${0.38 - lift * 0.02})`;
     ctx.fill();
 
-    // star glow
-    if (o.star >= 2 && !o.creep) {
+    // star glow (mythics get a pulsing red aura instead)
+    if (def.mythic) {
+      ctx.shadowColor = 'rgba(255,50,40,0.95)';
+      ctx.shadowBlur = 18 + Math.sin(this.time * 3) * 6;
+    } else if (o.star >= 2 && !o.creep) {
       ctx.shadowColor = o.star === 3 ? 'rgba(255,210,70,0.9)' : 'rgba(190,220,255,0.7)';
       ctx.shadowBlur = o.star === 3 ? 16 + Math.sin(this.time * 4) * 4 : 10;
     }
@@ -554,7 +567,7 @@ export class Renderer {
       }
     }
     // stars
-    if (o.star && !o.creep) {
+    if (o.star && !o.creep && !def.mythic) {
       ctx.font = 'bold 12px sans-serif';
       ctx.fillStyle = STAR_COLORS[o.star];
       ctx.strokeStyle = 'rgba(0,0,0,0.9)';

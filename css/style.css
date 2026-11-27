@@ -13,6 +13,7 @@
   --c3: #3c8dff;
   --c4: #b45cff;
   --c5: #ffb52e;
+  --c10: #ff3b3b;
   --emoji: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
   --display: "Chakra Petch", system-ui, sans-serif;
   --panel-bg: linear-gradient(180deg, rgba(28, 39, 60, .94), rgba(16, 23, 36, .94));
@@ -337,6 +338,18 @@ aside h3:not(:first-child) { margin-top: 14px; }
 .card.cost-3 { --cc: var(--c3); }
 .card.cost-4 { --cc: var(--c4); }
 .card.cost-5 { --cc: var(--c5); box-shadow: 0 6px 14px rgba(0, 0, 0, .35), 0 0 14px #ffb52e55; }
+.card.cost-10 { --cc: var(--c10); animation: mythic-glow 1.6s ease-in-out infinite; }
+.card.cost-10.fresh { animation: card-in .3s cubic-bezier(.2, 1.3, .4, 1) both, mythic-glow 1.6s ease-in-out .3s infinite; }
+@keyframes mythic-glow {
+  0%, 100% { box-shadow: 0 6px 14px rgba(0, 0, 0, .35), 0 0 12px #ff3b3b66; }
+  50% { box-shadow: 0 6px 14px rgba(0, 0, 0, .35), 0 0 26px #ff3b3bcc; }
+}
+.mythic-power { font-size: 12px; line-height: 1.4; margin: 6px 0 3px; padding: 5px 7px; border-radius: 6px; background: #ff3b3b1a; border-left: 3px solid var(--c10); }
+.mythic-power b { color: #ff8a7a; }
+.mythic-tag {
+  font-family: var(--display); font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+  color: #fff; background: linear-gradient(90deg, #c41e1e, #ff5a3a); padding: 1px 6px; border-radius: 4px; vertical-align: middle;
+}
 .card.fresh { animation: card-in .3s cubic-bezier(.2, 1.3, .4, 1) both; animation-delay: calc(var(--i, 0) * 45ms); }
 @keyframes card-in { from { opacity: 0; transform: translateY(14px) scale(.94); } }
 .card.owned::after {

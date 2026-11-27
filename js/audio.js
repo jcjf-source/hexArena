@@ -100,6 +100,19 @@ const SOUNDS = {
   win: () => { arp([523, 659, 784], 0.1, { type: 'triangle', vol: 0.15, decay: 0.3 }); tone({ freq: 1047, type: 'triangle', vol: 0.17, decay: 0.7, at: 0.3 }); },
   loss: () => { arp([392, 330, 262], 0.14, { type: 'triangle', vol: 0.14, decay: 0.35 }); tone({ freq: 196, type: 'sine', vol: 0.15, decay: 0.8, at: 0.42 }); },
   tick: () => tone({ freq: 1500, type: 'square', vol: 0.04, decay: 0.03 }),
+  mythic: () => {
+    arp([392, 587, 784, 1175, 1568], 0.07, { type: 'sine', vol: 0.09, decay: 0.6 });
+    tone({ freq: 98, type: 'sawtooth', vol: 0.06, attack: 0.1, decay: 0.9 });
+  },
+  mythicBuy: () => {
+    arp([523, 784, 1047, 1568, 2093], 0.06, { type: 'triangle', vol: 0.12, decay: 0.5 });
+    noise({ freq: 400, to: 4000, q: 1, vol: 0.12, attack: 0.05, decay: 0.5 });
+    tone({ freq: 131, type: 'sawtooth', vol: 0.08, attack: 0.02, decay: 1.0 });
+  },
+  rebirth: () => {
+    noise({ freq: 200, to: 3000, q: 0.8, vol: 0.3, attack: 0.15, decay: 0.5 });
+    arp([262, 392, 523, 784], 0.08, { type: 'sawtooth', vol: 0.07, decay: 0.5, at: 0.1 });
+  },
   gameover: () => arp([262, 330, 392, 523, 659], 0.12, { type: 'triangle', vol: 0.14, decay: 0.6 }),
 
   // combat
@@ -151,6 +164,7 @@ export function combatSound(e) {
     case 'aoe': play('boom', e.radius >= 2); break;
     case 'blink': play('blink'); break;
     case 'death': play('death'); break;
+    case 'rebirth': play('rebirth'); break;
     default: break;
   }
 }

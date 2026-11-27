@@ -3,7 +3,7 @@
 // Clients receive per-player snapshots from viewFor() and send actions to dispatch().
 
 import {
-  UNITS, POOL_SIZE, SHOP_ODDS, XP_TO_LEVEL, MAX_LEVEL, isPveRound, creepWave,
+  UNITS, POOL_SIZE, SHOP_ODDS, MYTHIC_SHOP, mythicScale, XP_TO_LEVEL, MAX_LEVEL, isPveRound, creepWave,
 } from './data.js';
 import { Combat, countTraits, activeTiers, randomSeed } from './combat.js';
 import {
@@ -259,7 +259,7 @@ export class Game {
     }
     for (let attempt = 0; attempt < 5; attempt++) {
       const c = ((cost - 1 - attempt + 5) % 5) + 1;
-      const keys = Object.keys(UNITS).filter((k) => UNITS[k].cost === c && this.pool[k] > 0);
+      const keys = Object.keys(UNITS).filter((k) => UNITS[k].cost === c && !UNITS[k].mythic && this.pool[k] > 0);
       const total = keys.reduce((s, k) => s + this.pool[k], 0);
       if (!total) continue;
       let r = Math.random() * total;
@@ -281,6 +281,22 @@ export class Game {
       if (key) this.pool[key]--;
       return key;
     });
+  }
+
+  // One roll per round for the whole lobby: maybe put a mythic that's still in the pool
+  // into one random player's shop, replacing a card (which goes back to the pool).
+  offerMythic() {
+    if (this.round < MYTHIC_SHOP.fromRound || Math.random() * 100 >= MYTHIC_SHOP.chance) return;
+    const keys = Object.keys(UNITS).filter((k) => UNITS[k].mythic && this.pool[k] > 0);
+    const alive = this.alivePlayers().filter((p) => p.shop.length);
+    if (!keys.length || !alive.length) return;
+    const key = keys[rand(keys.length)];
+    const p = alive[rand(alive.length)];
+    const i = rand(p.shop.length);
+    if (p.shop[i]) this.pool[p.shop[i]]++;
+    p.shop[i] = key;
+    this.pool[key]--;
+    this.banner(p, `${UNITS[key].icon} A Mythic appears in your shop!`, 'star');
   }
 
   releaseShop(p) {
@@ -505,6 +521,7 @@ export class Game {
       this.combineAll(p);
       if (augRound) this.offerAugments(p);
     }
+    this.offerMythic(); // before the bots shop, so a bot can be the one offered it
     for (const p of this.alivePlayers()) {
       if (!p.isHuman) { this.aiPickAugment(p); this.aiTurn(p); }
     }
@@ -521,8 +538,13 @@ export class Game {
     if (this.round > 1) for (const p of this.alivePlayers()) this.banner(p, '🗺️ The arena shifts!', 'star');
   }
 
+  // Fight snapshot of a board. Mythics carry their current power as a scale.
   teamOf(p) {
-    return boardUnits(p).map((b) => ({ unit: { key: b.unit.key, star: b.unit.star }, x: b.x, y: b.y }));
+    return boardUnits(p).map((b) => {
+      const unit = { key: b.unit.key, star: b.unit.star };
+      if (UNITS[b.unit.key].mythic) unit.scale = mythicScale(this.round, p.level);
+      return { unit, x: b.x, y: b.y };
+    });
   }
 
   // Fair rotation: everyone faces every remaining opponent once before any
@@ -818,9 +840,9 @@ export class Game {
       const d = UNITS[key];
       const copies = owned.filter((u) => u.key === key).length;
       const traitScore = d.traits.reduce((s, t) => s + (tc[t] || 0), 0);
-      const want = copies > 0 || owned.length < p.level + 2 || (traitScore >= 3 && owned.length < p.level + 5);
+      const want = d.mythic || copies > 0 || owned.length < p.level + 2 || (traitScore >= 3 && owned.length < p.level + 5);
       if (!want) continue;
-      const floor = copies > 0 ? reserve * 0.6 : reserve;
+      const floor = d.mythic ? 0 : copies > 0 ? reserve * 0.6 : reserve; // always grab a mythic
       if (p.gold - d.cost < floor) continue;
       if (!this.canBuy(p, key)) {
         this.aiTrimBench(p, 1);

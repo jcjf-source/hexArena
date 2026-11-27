@@ -18,7 +18,7 @@
 //      so treat it as a sanity check, not the main signal.
 
 import fs from 'node:fs';
-import { UNITS, TRAITS } from '../js/data.js';
+import { UNITS, TRAITS, mythicScale } from '../js/data.js';
 import { Combat, activeTiers } from '../js/combat.js';
 import { Game } from '../js/game.js';
 import { AUGMENTS, traitBonus } from '../js/augments.js';
@@ -34,6 +34,7 @@ const N = {
   traitFights: quick ? 120 : 400,
   costFights: quick ? 120 : 400,
   ruleFights: quick ? 300 : 1500,
+  mythicGames: quick ? 15 : 50,
   games: quick ? 100 : 1000,
 };
 
@@ -256,6 +257,64 @@ function costCurve() {
     if (r.ratio > tst.hi) { flag = '◀ too big'; flags.push(`Cost curve: ${tst.label} is ${boost(r.ratio)}`); }
     console.log(`   ${tst.label.padEnd(26)} ${boost(r.ratio).padStart(6)}   win ${pct(r.win).padStart(6)}  ${flag}`);
     out.cost.push({ test: tst.label, worth: r.ratio - 1, winRate: r.win });
+  }
+  console.log(`   (${elapsed(t0)})`);
+  mythicValue();
+}
+
+// Mythics: a mythic's power grows with the round and its owner's level, so test it where it
+// is actually used. Take real bot boards at a round, swap each board's cheapest unit for the
+// mythic at the power the game would give it, and fight the other boards from that round.
+// Targets: a modest edge when first available, the best unit late but still beatable.
+const MYTHIC_TARGETS = [
+  { round: 9, lo: 0.52, hi: 0.65 },
+  { round: 15, lo: 0.6, hi: 0.76 },
+  { round: 21, lo: 0.66, hi: 0.82 },
+];
+function mythicValue() {
+  const t0 = Date.now();
+  const mythics = KEYS.filter((k) => UNITS[k].mythic);
+  if (!mythics.length) return;
+  console.log(`\n   Mythics on real bot boards (${N.mythicGames} games per round): win rate vs the other boards that round,`);
+  console.log('   without -> with the mythic in place of the board\'s cheapest unit.');
+  for (const m of mythics) {
+    for (const tgt of MYTHIC_TARGETS) {
+      let fights = 0, without = 0, withM = 0, power = 0, owners = 0;
+      for (let g = 0; g < N.mythicGames; g++) {
+        const game = new Game({ humans: [], rule: { id: 'boom' } }); // a rule with no combat effect
+        game.start();
+        while (game.round < tgt.round && game.phase !== 'gameover') {
+          game.startCombat();
+          if (game.phase === 'results') game.nextRound();
+        }
+        if (game.phase === 'gameover') continue;
+        const boards = game.alivePlayers().map((p) => ({ p, team: game.teamOf(p) })).filter((b) => b.team.length);
+        for (const mine of boards) {
+          const t = mine.team;
+          const scale = mythicScale(tgt.round, mine.p.level);
+          power += scale; owners++;
+          let worst = 0;
+          t.forEach((s, k) => { if (UNITS[s.unit.key].cost * s.unit.star < UNITS[t[worst].unit.key].cost * t[worst].unit.star) worst = k; });
+          const swapped = t.map((s, k) => (k === worst ? { ...s, unit: { key: m, star: 1, scale } } : s));
+          for (const opp of boards) {
+            if (opp === mine) continue;
+            const tiers = (team) => activeTiers(team.map((s) => s.unit));
+            const run = (a) => new Combat(a, opp.team, { record: false, tiersA: tiers(a), tiersB: tiers(opp.team) }).runToEnd().winner;
+            fights++;
+            without += run(t) === 'A' ? 1 : 0;
+            withM += run(swapped) === 'A' ? 1 : 0;
+          }
+        }
+      }
+      if (!fights) continue;
+      const w = withM / fights;
+      let flag = '';
+      if (w > tgt.hi) { flag = '◀ too strong'; flags.push(`Mythic ${UNITS[m].name} at round ${tgt.round} lifts boards to ${pct(w)} wins (target ${pct(tgt.lo)}-${pct(tgt.hi)})`); }
+      if (w < tgt.lo) { flag = '◀ too weak'; flags.push(`Mythic ${UNITS[m].name} at round ${tgt.round} only lifts boards to ${pct(w)} wins (target ${pct(tgt.lo)}-${pct(tgt.hi)})`); }
+      const label = `${UNITS[m].name}, round ${tgt.round}`;
+      console.log(`   ${label.padEnd(26)} power ${pct(power / owners).padStart(5)}   ${pct(without / fights).padStart(6)} -> ${pct(w).padStart(6)}   (${fights} fights)  ${flag}`);
+      out.cost.push({ test: label, power: power / owners, winWithout: without / fights, winWith: w });
+    }
   }
   console.log(`   (${elapsed(t0)})`);
 }

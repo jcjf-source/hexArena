@@ -1,7 +1,7 @@
 // DOM UI: top bar, shop, synergies, lobby, unit info, and input handling.
 // Reads the player's snapshot (session.view) and sends actions (session.act).
 
-import { UNITS, TRAITS, COST_COLORS, XP_TO_LEVEL, MAX_LEVEL, fillTemplate } from './data.js';
+import { UNITS, TRAITS, COST_COLORS, XP_TO_LEVEL, MAX_LEVEL, MYTHIC_POWER, fillTemplate, mythicScale } from './data.js';
 import { countTraits, traitTier, getDef } from './combat.js';
 import {
   sellValue, REROLL_COST, XP_COST, getAt, boardUnits, boardCount, allUnits, canBuy,
@@ -41,19 +41,33 @@ function traitChips(def) {
   return def.traits.map((t) => `<span class="chip">${TRAITS[t].icon} ${TRAITS[t].name}</span>`).join('');
 }
 
-export function unitInfoHTML(key, star, live) {
+// power: a mythic's current power multiplier when not in a live fight (see mythicScale).
+export function unitInfoHTML(key, star, live, power = 1) {
   const def = getDef(key);
-  const m = [1, 1.8, 3.24][star - 1] * (live?.scale || 1);
+  const scale = live ? (live.scale || 1) : power;
+  const m = [1, 1.8, 3.24][star - 1] * scale;
   const hp = live ? `${Math.ceil(live.hp)} / ${Math.round(live.maxHp)}` : Math.round(def.hp * m);
   const ad = Math.round(live ? live.ad : def.ad * m);
   const as = (live ? live.as : def.as).toFixed(2);
   const armor = Math.round(live ? live.armor : def.armor);
   const mr = Math.round(live ? live.mr : def.mr);
   const mana = def.mana ? (live ? `${Math.floor(live.mana)} / ${live.maxMana}` : `${def.mana[0]} / ${def.mana[1]}`) : '—';
-  const stars = def.traits.length ? `<span class="stars s${star}">${'★'.repeat(star)}</span>` : '';
+  const stars = def.mythic ? '<span class="mythic-tag">Mythic</span>'
+    : def.traits.length ? `<span class="stars s${star}">${'★'.repeat(star)}</span>` : '';
+  // Mythic spell numbers scale with power, so show the scaled values.
+  const abVals = def.mythic && def.ability
+    ? Object.fromEntries(Object.entries(def.ability).map(([k, v]) => [k, k === 'dmg' || k === 'amount' ? v.map((x) => Math.round(x * scale)) : v]))
+    : def.ability;
   const ab = def.ability
-    ? `<div class="ability"><div class="ab-name">${def.ability.name}</div><div class="ab-desc">${fillTemplate(def.ability.desc, def.ability, star)}</div></div>`
+    ? `<div class="ability"><div class="ab-name">${def.ability.name}</div><div class="ab-desc">${fillTemplate(def.ability.desc, abVals, star)}</div></div>`
     : '';
+  const passive = def.passive
+    ? `<div class="ability"><div class="ab-name">${def.passive.name} <span class="muted">(passive)</span></div><div class="ab-desc">${fillTemplate(def.passive.desc, { dmg: Math.round(def.passive.dmg * scale) })}</div></div>`
+    : '';
+  const P = MYTHIC_POWER;
+  const mythicNote = def.mythic ? `<div class="mythic-power"><b>Power ${Math.round(scale * 100)}%</b>: grows with the round and its owner's level,
+    from ${Math.round(P.min * 100)}% to ${Math.round(P.max * 100)}% (full at round ${P.fullRound} and level ${P.fullLevel}). Scales HP, attack damage and spells.</div>
+    <div class="muted">Only one exists in the whole game, and it can't be starred up.</div>` : '';
   const cost = def.traits.length ? `<span class="cost-tag" style="background:${COST_COLORS[def.cost]}">${def.cost}g</span>` : '';
   return `
     <div class="info-head"><span class="info-icon">${def.icon}</span>
@@ -63,7 +77,7 @@ export function unitInfoHTML(key, star, live) {
       <div>⚔️ AD <b>${ad}</b></div><div>⏱️ AS <b>${as}</b></div>
       <div>🛡️ Armor <b>${armor}</b></div><div>🔮 MR <b>${mr}</b></div>
       <div>🎯 Range <b>${def.range}</b></div>
-    </div>${ab}`;
+    </div>${ab}${passive}${mythicNote}`;
 }
 
 // Trait effect sentence with every tier's value, the active one in bold: "+<b>20</b>/45%".
@@ -107,6 +121,9 @@ export class UI {
   }
 
   get v() { return this.session ? this.session.view : null; }
+
+  // The power a mythic of mine would fight at this round (same formula as game.teamOf).
+  mythicPower() { return this.v ? mythicScale(this.v.round, this.v.me.level) : 1; }
   get locked() { return !this.v || this.v.phase !== 'planning'; }
 
   act(a) { if (this.session && this.v && this.v.me.alive) this.session.act(a); }
@@ -158,7 +175,7 @@ export class UI {
       const card = e.target.closest('.card');
       if (!card || card.classList.contains('empty') || !this.v) return;
       const key = this.v.me.shop[Number(card.dataset.i)];
-      if (key) this.showInfo(unitInfoHTML(key, 1));
+      if (key) this.showInfo(unitInfoHTML(key, 1, null, this.mythicPower()));
     });
     $('traits').addEventListener('mouseover', (e) => {
       const row = e.target.closest('.trait');
@@ -276,7 +293,7 @@ export class UI {
     const u = loc && getAt(v.me, loc);
     if (u) {
       this.hoverLoc = loc;
-      this.showInfo(unitInfoHTML(u.key, u.star));
+      this.showInfo(unitInfoHTML(u.key, u.star, null, this.mythicPower()));
     } else this.showTerrainAt(pk);
   }
 
@@ -391,12 +408,17 @@ export class UI {
       else if (cur.phase === 'gameover') play('gameover');
     }
     if (cur.augs > prev.augs) play('augment');
+    if (cur.round !== prev.round && cur.shop.some((k) => k && UNITS[k].mythic)) play('mythic');
     if (cur.round !== prev.round || cur.phase !== 'planning' || prev.phase !== 'planning') return;
     if (cur.level > prev.level) play('levelup');
     else if (cur.xp > prev.xp) play('xp');
     const bought = cur.shop.some((k, i) => !k && prev.shop[i]);
     const shopChanged = cur.shop.some((k, i) => k !== prev.shop[i]);
-    if (bought) play('buy');
+    const mythicNow = cur.shop.some((k) => k && UNITS[k].mythic);
+    const mythicBefore = prev.shop.some((k) => k && UNITS[k].mythic);
+    if (bought && cur.shop.some((k, i) => !k && prev.shop[i] && UNITS[prev.shop[i]].mythic)) play('mythicBuy');
+    else if (bought) play('buy');
+    if (mythicNow && !mythicBefore) play('mythic');
     else if (shopChanged) play('reroll');
     else if (cur.units < prev.units && cur.gold > prev.gold) play('sell');
   }

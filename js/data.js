@@ -1,9 +1,9 @@
 // Game data: units, traits, creeps and economy tables.
 
-export const COST_COLORS = { 1: '#9aa4b1', 2: '#3fbf6f', 3: '#3c8dff', 4: '#b45cff', 5: '#ffb52e' };
+export const COST_COLORS = { 1: '#9aa4b1', 2: '#3fbf6f', 3: '#3c8dff', 4: '#b45cff', 5: '#ffb52e', 10: '#ff3b3b' };
 
 // Copies of each unit in the shared pool, by cost.
-export const POOL_SIZE = { 1: 29, 2: 22, 3: 18, 4: 12, 5: 10 };
+export const POOL_SIZE = { 1: 29, 2: 22, 3: 18, 4: 12, 5: 10, 10: 1 };
 
 // Shop odds (%) for costs 1..5 at each player level.
 export const SHOP_ODDS = {
@@ -17,6 +17,22 @@ export const SHOP_ODDS = {
   8: [18, 25, 32, 22, 3],
   9: [10, 20, 25, 35, 10],
 };
+
+// Mythic units: cost 10, one copy in the whole lobby, never starred up. They never come
+// from normal shop rolls: from `fromRound` on, each round has a `chance`% (one roll for
+// the whole lobby) that a mythic still in the pool appears in one random player's shop.
+export const MYTHIC_SHOP = { fromRound: 9, chance: 4 };
+
+// A mythic's HP, attack damage and ability power are multiplied by its power, which grows
+// with the round and its owner's level (half each), from `min` to `max`.
+export const MYTHIC_POWER = { min: 0.47, max: 1, fromRound: 9, fullRound: 24, fromLevel: 5, fullLevel: 9 };
+
+export function mythicScale(round, level) {
+  const P = MYTHIC_POWER;
+  const k = (v, a, b) => Math.max(0, Math.min(1, (v - a) / (b - a)));
+  const progress = (k(round, P.fromRound, P.fullRound) + k(level, P.fromLevel, P.fullLevel)) / 2;
+  return Math.round((P.min + (P.max - P.min) * progress) * 1000) / 1000;
+}
 
 // XP needed to go from level N to N+1 (index = current level).
 export const XP_TO_LEVEL = [0, 2, 2, 6, 10, 20, 36, 56, 80];
@@ -127,6 +143,14 @@ export const UNITS = {
   kraken: { name: 'Kraken', icon: '🐙', cost: 5, traits: ['tide', 'ranger'],
     hp: 1100, ad: 95, as: 0.8, range: 4, armor: 35, mr: 35, mana: [0, 90],
     ability: { name: 'Ink Barrage', type: 'multishot', count: [6, 6, 10], dmg: [350, 525, 2000], desc: 'Fires at the {count} nearest enemies for {dmg} magic damage.' } },
+
+  // ---------- mythic (10 cost) ----------
+  // Only one copy exists and it stays 1★, so its power is built in. Values are arrays like
+  // other units' so the shared templates work, but only the first entry is ever used.
+  phoenix: { name: 'Crimson Phoenix', icon: '🦅', cost: 10, mythic: true, traits: ['ember', 'arcanist'],
+    hp: 1200, ad: 70, as: 0.8, range: 3, armor: 45, mr: 45, mana: [30, 100],
+    ability: { name: 'Sunfire Cataclysm', type: 'aoe', radius: 2, dmg: [600, 600, 600], stun: [1, 1, 1], desc: 'Calls down the sun on its target, dealing {dmg} magic damage to enemies within 2 hexes and stunning them for {stun}s.' },
+    passive: { type: 'rebirth', name: 'Rebirth', hpPct: 50, dmg: 300, radius: 2, desc: 'The first time it dies in a fight, it is reborn with 50% HP and explodes, dealing {dmg} magic damage to enemies within 2 hexes.' } },
 };
 
 // Neutral monsters for PvE rounds.
