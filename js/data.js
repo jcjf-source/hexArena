@@ -3,7 +3,8 @@
 export const COST_COLORS = { 1: '#9aa4b1', 2: '#3fbf6f', 3: '#3c8dff', 4: '#b45cff', 5: '#ffb52e', 10: '#ff3b3b' };
 
 // Copies of each unit in the shared pool, by cost.
-export const POOL_SIZE = { 1: 29, 2: 22, 3: 18, 4: 12, 5: 10, 10: 1 };
+// Cheap costs get more copies: there are only 5-6 units per cost to share between 8 players.
+export const POOL_SIZE = { 1: 39, 2: 28, 3: 22, 4: 12, 5: 10, 10: 1 };
 
 // Shop odds (%) for costs 1..5 at each player level.
 export const SHOP_ODDS = {

@@ -257,8 +257,11 @@ export class Game {
       if (roll < odds[i]) { cost = i + 1; break; }
       roll -= odds[i];
     }
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const c = ((cost - 1 - attempt + 5) % 5) + 1;
+    // If the rolled cost is sold out, use the nearest cost this level can roll (cheaper on a
+    // tie). Never a cost the level can't roll: if all of those are sold out, the slot is empty.
+    const allowed = [1, 2, 3, 4, 5].filter((c) => odds[c - 1] > 0)
+      .sort((a, b) => (Math.abs(a - cost) - Math.abs(b - cost)) || (a - b));
+    for (const c of allowed) {
       const keys = Object.keys(UNITS).filter((k) => UNITS[k].cost === c && !UNITS[k].mythic && this.pool[k] > 0);
       const total = keys.reduce((s, k) => s + this.pool[k], 0);
       if (!total) continue;
@@ -829,6 +832,19 @@ export class Game {
     }
     if (p.gold - XP_COST >= reserve + 10 && p.level < MAX_LEVEL) this.buyXp(p);
     this.aiArrange(p);
+    this.aiCleanBench(p);
+  }
+
+  // From round 8, sell cheap bench units that aren't going anywhere: a 1★ 1- or 2-cost
+  // with no other copy owned. Without this, bots sit on most of the 1-cost pool and
+  // nobody else can find copies to upgrade.
+  aiCleanBench(p) {
+    if (this.round < 8) return;
+    p.bench.forEach((u, i) => {
+      if (!u || u.star !== 1 || UNITS[u.key].cost > 2) return;
+      if (allUnits(p).filter((l) => l.unit.key === u.key).length > 1) return;
+      this.sell(p, { area: 'bench', i });
+    });
   }
 
   aiShop(p, reserve) {
@@ -842,6 +858,9 @@ export class Game {
       const traitScore = d.traits.reduce((s, t) => s + (tc[t] || 0), 0);
       const want = d.mythic || copies > 0 || owned.length < p.level + 2 || (traitScore >= 3 && owned.length < p.level + 5);
       if (!want) continue;
+      // From round 10, only buy a 1-cost if it completes a star-up right away, so bots don't
+      // sit on the cheap pool once they've moved on to pricier units.
+      if (d.cost === 1 && this.round >= 10 && findCopies(p, key, 1, true).length < 2) continue;
       const floor = d.mythic ? 0 : copies > 0 ? reserve * 0.6 : reserve; // always grab a mythic
       if (p.gold - d.cost < floor) continue;
       if (!this.canBuy(p, key)) {
