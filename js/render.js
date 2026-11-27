@@ -6,6 +6,8 @@ import { COLS, ROWS } from './hex.js';
 import { COST_COLORS } from './data.js';
 import { getDef } from './combat.js';
 import { BENCH_SIZE, boardUnits } from './game.js';
+import { combatSound } from './audio.js';
+import { TERRAIN } from './terrain.js';
 
 const SQ3 = Math.sqrt(3);
 export const R = 36;
@@ -274,6 +276,7 @@ export class Renderer {
     const c = this.combat;
     if (!c) return;
     for (const e of c.events) {
+      combatSound(e);
       const u = this.byId.get(e.unit);
       switch (e.type) {
         case 'attack': {
@@ -375,6 +378,7 @@ export class Renderer {
   drawBoard(view) {
     const ctx = this.ctx;
     ctx.drawImage(this.boardLayer, 0, 0, W, H);
+    this.drawTerrain(view.terrain);
     const locked = view.phase !== 'planning';
     const dragging = !!this.drag;
     const hov = dragging && this.pointer ? this.pick(this.pointer.x, this.pointer.y) : null;
@@ -399,6 +403,44 @@ export class Renderer {
       ctx.strokeStyle = '#8fc0ff';
       ctx.lineWidth = 2;
       ctx.stroke();
+    }
+  }
+
+  // Terrain hexes, in both halves. The layout is mirrored through the arena's centre,
+  // which is also how the view flips for team B, so it draws the same either way.
+  drawTerrain(terrain) {
+    if (!terrain || !terrain.length) return;
+    const ctx = this.ctx;
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * 2.4);
+    for (const t of terrain) {
+      const d = TERRAIN[t.type];
+      if (!d) continue;
+      for (const [col, row] of [[t.x, 4 + t.y], [COLS - 1 - t.x, 3 - t.y]]) {
+        const { x, y } = cellCenter(col, row);
+        ctx.save();
+        hexPath(ctx, x, y, R - 3);
+        const g = ctx.createRadialGradient(x, y, 4, x, y, R);
+        g.addColorStop(0, shade(d.color, -0.35));
+        g.addColorStop(1, shade(d.color, -0.7));
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = g;
+        ctx.fill();
+        ctx.globalAlpha = 0.55 + 0.35 * pulse;
+        ctx.strokeStyle = d.color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        hexPath(ctx, x, y, R - 8);
+        ctx.globalAlpha = 0.25;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.globalAlpha = 0.9;
+        ctx.font = `20px ${EMOJI_FONT}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(d.icon, x, y + 1);
+        ctx.restore();
+      }
     }
   }
 

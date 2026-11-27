@@ -7,6 +7,17 @@ import {
   sellValue, REROLL_COST, XP_COST, getAt, boardUnits, boardCount, allUnits, canBuy,
 } from './game.js';
 import { AUGMENTS, traitBonus } from './augments.js';
+import { play, isMuted, setMuted } from './audio.js';
+import { ruleName, ruleIcon, ruleDesc, ruleEcon, ruleTraitBonus } from './rules.js';
+import { TERRAIN, terrainAt } from './terrain.js';
+
+const terrainInfoHTML = (type) => {
+  const t = TERRAIN[type];
+  return `
+    <div class="info-head"><span class="info-icon">${t.icon}</span>
+      <div><div class="info-name">${t.name}</div><div class="muted">Terrain</div></div></div>
+    <div class="ability"><div class="ab-desc">${t.desc}</div></div>`;
+};
 
 const KIND_LABEL = { econ: 'Economy', combat: 'Combat', crest: 'Crest' };
 
@@ -104,6 +115,7 @@ export class UI {
     this.session = session;
     this.spectating = false;
     this.prevStats = null;
+    this.prevSound = null;
     this.lastShop = null;
     session.onView = () => this.refresh();
     session.onBanner = (text, kind) => this.banner(text, kind);
@@ -119,6 +131,15 @@ export class UI {
   }
 
   bindStatic() {
+    const mute = $('muteBtn');
+    const showMute = () => { mute.textContent = isMuted() ? '🔇' : '🔊'; mute.classList.toggle('on', isMuted()); };
+    mute.onclick = () => { setMuted(!isMuted()); showMute(); };
+    showMute();
+    // A soft click for plain buttons; shop actions get their own sounds from the state diff.
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (b && !b.disabled && !['rerollBtn', 'xpBtn'].includes(b.id)) play('click');
+    });
     $('rerollBtn').onclick = () => this.act({ type: 'reroll' });
     $('xpBtn').onclick = () => this.act({ type: 'xp' });
     $('lockBtn').onclick = () => this.act({ type: 'lock' });
@@ -186,6 +207,14 @@ export class UI {
   }
 
   bindCanvas() {
+    // The sell zone is pinned to the viewport on narrow layouts, so hit-test its rect
+    // rather than relying on the shop bar being on screen.
+    const overSell = (x, y) => {
+      const r = $('sellZone').getBoundingClientRect();
+      if (r.width && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+      const over = document.elementFromPoint(x, y);
+      return !!(over && over.closest('#shopbar'));
+    };
     const cv = this.r.canvas;
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
     cv.addEventListener('pointerdown', (e) => {
@@ -209,8 +238,7 @@ export class UI {
       const pt = this.r.toLocal(e.clientX, e.clientY);
       this.r.pointer = pt;
       if (this.r.drag) {
-        const over = document.elementFromPoint(e.clientX, e.clientY);
-        $('sellZone').classList.toggle('hot', !!(over && over.closest('#shopbar')));
+        $('sellZone').classList.toggle('hot', overSell(e.clientX, e.clientY));
         return;
       }
       this.updateHover(pt);
@@ -222,11 +250,10 @@ export class UI {
       this.r.drag = null;
       document.body.classList.remove('dragging');
       $('sellZone').classList.remove('hot');
-      const over = document.elementFromPoint(e.clientX, e.clientY);
-      if (over && over.closest('#shopbar')) { this.act({ type: 'sell', loc: drag.from }); return; }
+      if (overSell(e.clientX, e.clientY)) { this.act({ type: 'sell', loc: drag.from }); return; }
       const pt = this.r.toLocal(e.clientX, e.clientY);
       const to = this.locFromPick(this.r.pick(pt.x, pt.y));
-      if (to) this.act({ type: 'move', from: drag.from, to });
+      if (to) { this.act({ type: 'move', from: drag.from, to }); play('place'); }
     };
     cv.addEventListener('pointerup', end);
     cv.addEventListener('pointercancel', () => { this.r.drag = null; document.body.classList.remove('dragging'); });
@@ -242,15 +269,22 @@ export class UI {
       const s = this.r.toSim(pk.col, pk.row);
       const u = combat.units.find((x) => x.alive && x.col === s.col && x.row === s.row);
       if (u) this.showInfo(unitInfoHTML(u.key, u.star, u), u);
+      else this.showTerrainAt(pk);
       return;
     }
     const loc = this.locFromPick(pk);
-    if (!loc) return;
-    const u = getAt(v.me, loc);
+    const u = loc && getAt(v.me, loc);
     if (u) {
       this.hoverLoc = loc;
       this.showInfo(unitInfoHTML(u.key, u.star));
-    }
+    } else this.showTerrainAt(pk);
+  }
+
+  // Terrain is the same in both halves, mirrored through the centre (see terrain.js).
+  showTerrainAt(pk) {
+    if (pk.area !== 'board') return;
+    const t = pk.row >= 4 ? terrainAt(this.v.terrain, pk.col, pk.row - 4) : terrainAt(this.v.terrain, 6 - pk.col, 3 - pk.row);
+    if (t) this.showInfo(terrainInfoHTML(t));
   }
 
   showInfo(html, live = null) {
@@ -262,6 +296,9 @@ export class UI {
     const b = $('banner');
     b.textContent = text;
     b.className = `show ${kind}`;
+    if (kind === 'win') play('win');
+    else if (kind === 'loss') play('loss');
+    else if (kind === 'star' && text.startsWith('★')) play('star');
     this.bannerTimer = 2.2;
   }
 
@@ -275,6 +312,9 @@ export class UI {
     else if (v.phase === 'combat') t.textContent = combat ? `${Math.floor(combat.time)}s` : '';
     else t.textContent = '';
     t.classList.toggle('warn', v.phase === 'planning' && v.timer <= 5);
+    const sec = Math.ceil(v.timer);
+    if (v.phase === 'planning' && sec <= 5 && sec > 0 && sec !== this.lastTickSec) play('tick');
+    this.lastTickSec = v.phase === 'planning' ? sec : null;
     if (this.bannerTimer > 0) {
       this.bannerTimer -= dt;
       if (this.bannerTimer <= 0) $('banner').className = '';
@@ -308,6 +348,7 @@ export class UI {
     ready.classList.toggle('waiting', waiting);
     ready.classList.toggle('pulse', !ready.disabled && !waiting);
     this.floatDeltas(p);
+    this.diffSounds(v);
     $('speedBtn').textContent = `${v.speed}x`;
     $('goldVal').textContent = p.gold;
     $('hpVal').textContent = Math.max(0, p.hp);
@@ -317,19 +358,47 @@ export class UI {
     $('xpFill').style.width = need ? `${(p.xp / need) * 100}%` : '100%';
     $('unitCap').textContent = `${boardCount(p)} / ${p.level}`;
     $('xpBtn').disabled = !p.alive || p.gold < XP_COST || p.level >= MAX_LEVEL;
-    $('rerollBtn').disabled = !p.alive || (!p.freeReroll && p.gold < REROLL_COST);
-    $('rerollBtn').innerHTML = `Reroll<small>${p.freeReroll ? 'Free' : `${REROLL_COST}g`}</small>`;
+    const rerollCost = ruleEcon(v.rule, 'rerollCost', REROLL_COST);
+    $('rerollBtn').disabled = !p.alive || (!p.freeReroll && p.gold < rerollCost);
+    $('rerollBtn').innerHTML = `Reroll<small>${p.freeReroll ? 'Free' : `${rerollCost}g`}</small>`;
     $('lockBtn').textContent = p.locked ? '🔒' : '🔓';
     $('lockBtn').classList.toggle('on', p.locked);
     const streak = p.streak;
     $('streak').textContent = Math.abs(streak) >= 2 ? (streak > 0 ? `🔥${streak}` : `❄️${-streak}`) : '';
 
     this.renderShop();
+    this.renderArena();
     this.renderAugments();
     this.renderAugPick();
     this.renderTraits();
     this.renderLobby();
     this.renderOverlay();
+  }
+
+  // Work out what just happened from the snapshot change and play a sound for it.
+  // Diffing (rather than hooking act()) means only actions the host accepted make noise.
+  diffSounds(v) {
+    const p = v.me;
+    const cur = {
+      pid: v.pid, round: v.round, phase: v.phase, level: p.level, xp: p.xp, gold: p.gold,
+      units: allUnits(p).length, shop: p.shop.slice(), augs: p.augments.length,
+    };
+    const prev = this.prevSound;
+    this.prevSound = cur;
+    if (!prev || prev.pid !== cur.pid) return;
+    if (cur.phase !== prev.phase) {
+      if (cur.phase === 'combat') play('fight');
+      else if (cur.phase === 'gameover') play('gameover');
+    }
+    if (cur.augs > prev.augs) play('augment');
+    if (cur.round !== prev.round || cur.phase !== 'planning' || prev.phase !== 'planning') return;
+    if (cur.level > prev.level) play('levelup');
+    else if (cur.xp > prev.xp) play('xp');
+    const bought = cur.shop.some((k, i) => !k && prev.shop[i]);
+    const shopChanged = cur.shop.some((k, i) => k !== prev.shop[i]);
+    if (bought) play('buy');
+    else if (shopChanged) play('reroll');
+    else if (cur.units < prev.units && cur.gold > prev.gold) play('sell');
   }
 
   // Floating "+3" / "-12" next to gold and HP when they change.
@@ -348,6 +417,20 @@ export class UI {
     if (dg) pop(document.querySelector('.gold'), dg > 0 ? `+${dg}` : `${dg}`, dg > 0 ? 'up' : 'down');
     const dh = p.hp - prev.hp;
     if (dh) pop(document.querySelector('.hp'), dh > 0 ? `+${dh}` : `${dh}`, dh > 0 ? 'up' : 'down');
+  }
+
+  // The game's arena rule, plus a legend for the terrain on the board right now.
+  renderArena() {
+    const v = this.v;
+    const types = [...new Set((v.terrain || []).map((t) => t.type))];
+    const key = `${v.rule?.id}|${v.rule?.trait}|${types.join()}`;
+    if (key === this.arenaKey) return; // unchanged: keep the DOM (and any hover) stable
+    this.arenaKey = key;
+    const rule = v.rule ? `<div class="rule-card"><span class="rule-icon">${ruleIcon(v.rule)}</span>
+      <div><div class="rule-name">${ruleName(v.rule)}</div><div class="rule-desc">${ruleDesc(v.rule)}</div></div></div>` : '';
+    const tiles = types.map((t) => `<div class="tile-chip" style="--tc:${TERRAIN[t].color}" title="${TERRAIN[t].desc}">
+      <span>${TERRAIN[t].icon}</span>${TERRAIN[t].name}</div>`).join('');
+    $('arena').innerHTML = `${rule}<div class="tiles">${tiles}</div>`;
   }
 
   renderAugments() {
@@ -415,7 +498,7 @@ export class UI {
 
   renderTraits() {
     const units = boardUnits(this.v.me).map((b) => b.unit);
-    const bonus = traitBonus(this.v.me.augments) || {};
+    const bonus = traitBonus(this.v.me.augments, ruleTraitBonus(this.v.rule)) || {};
     const counts = countTraits(units, bonus);
     const rows = Object.keys(counts).map((k) => ({ k, c: counts[k], tier: traitTier(k, counts[k]) }));
     rows.sort((a, b) => (b.tier - a.tier) || (b.c - a.c));
@@ -428,7 +511,7 @@ export class UI {
         <span class="ticon">${t.icon}</span>
         <div class="tmain">
           <div class="thead"><span class="tname">${t.name}</span><span class="tcount">${c}</span></div>
-          <div class="tbp">${bps} ${need}${bonus[k] ? ` <span class="tcrest" title="Includes your crest">+${bonus[k]} crest</span>` : ''}</div>
+          <div class="tbp">${bps} ${need}${bonus[k] ? ` <span class="tcrest" title="Includes crests and the arena rule">+${bonus[k]} bonus</span>` : ''}</div>
           <div class="tdesc">${traitEffect(k, tier)}</div>
         </div></div>`;
     }).join('') : '<div class="muted">Place units on the board to activate synergies. Hover one to see what it does.</div>';
