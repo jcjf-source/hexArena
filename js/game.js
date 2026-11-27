@@ -520,7 +520,17 @@ export class Game {
       this.pool[key]--;
       p.bench[0] = makeInst(key);
     }
+    this.secretStart();
     this.nextRound();
+  }
+
+  // Easter egg: a human named "crimson" starts with the Crimson Phoenix (while it's still in the pool).
+  secretStart() {
+    const p = this.players.find((q) => q.isHuman && q.name.trim().toLowerCase() === 'crimson');
+    if (!p || this.pool.phoenix <= 0) return;
+    this.pool.phoenix--;
+    p.bench[p.bench.indexOf(null)] = makeInst('phoenix');
+    this.banner(p, '🦅 The Crimson Phoenix answers your call!', 'star');
   }
 
   income(p) {
