@@ -45,8 +45,12 @@ Limits: there is no relay (TURN) server, so some strict networks (certain workpl
 - **Levels:** your level is your board size (max 9). Higher levels improve shop odds for expensive units.
 - **Star ups:** three copies of a unit combine into a 2★, and three 2★ into a 3★.
 - **Traits:** 5 origins (Ember, Tide, Grove, Storm, Void) and 5 classes (Guardian, Striker, Ranger, Mystic, Arcanist), each with 2/4(/6) breakpoints.
-- **Damage:** losing a fight costs stage damage plus the stars of every surviving enemy unit.
-- **Augments:** at rounds 3, 10 and 17 everyone picks one of three upgrades for the rest of the game: economy boosts, team-wide combat bonuses, or a crest (+1 to a trait you have, and +15% HP and damage for its units). Augments are defined in `js/augments.js`; `npm run balance` measures the combat ones and crests.
+- **Damage:** losing a fight costs stage damage (1 rising to 9) plus 3/4 HP per star of every surviving enemy unit. Games last about 30 rounds, with several players still in at level 8.
+- **Augments:** at rounds 3, 10, 17 and 24 everyone picks one of three upgrades for the rest of the game: economy boosts, team-wide combat bonuses, or a crest (+1 to a trait you have, and +10% HP and damage for its units). Augments are defined in `js/augments.js`; `npm run balance` measures the combat ones and crests.
+- **Arena rules:** each game rolls one rule that applies to everyone (combat modifiers, economy tweaks, terrain variants, or an Ascendant trait). See `js/rules.js`.
+- **Terrain:** a few hexes on each half buff the unit standing on them (healing spring, high ground, cover, mana well, war banner). Both halves get the same layout, mirrored, and it changes every 6 rounds. See `js/terrain.js`.
+- **Mythic:** the Crimson Phoenix costs 10 gold and only one exists per game. From round 9, each round has a small chance that it appears in one random player's shop. Its power grows with the round and its owner's level.
+- **Sound:** effects are synthesised with Web Audio (no audio files); the 🔊 button mutes them.
 
 **Controls:** drag units between the bench and the board. Drag a unit onto the shop or right-click it to sell. Keys: `D` reroll, `F` buy XP, `E` sell the hovered unit, `Space` ready.
 
@@ -55,9 +59,13 @@ Limits: there is no relay (TURN) server, so some strict networks (certain workpl
 ```
 index.html          page shell
 css/style.css       styles
-js/data.js          units, traits, creeps, shop odds, XP table
+js/data.js          units, traits, creeps, shop odds, pool sizes, XP table, mythic settings
 js/hex.js           hex grid math (odd-r offset)
-js/combat.js        combat simulation (headless-capable)
+js/combat.js        combat simulation (headless-capable), including terrain effects
+js/augments.js      augments and crests
+js/rules.js         arena rules (one per game)
+js/terrain.js       terrain tile types and layout generation
+js/audio.js         synthesised sound effects and mute setting
 js/game.js          rounds, economy, shop/pool, matchmaking, bot AI, per-player snapshots
 js/session.js       host session (runs the game) and client session (mirrors it)
 js/net.js           PeerJS loading, room codes, connect helpers
@@ -73,11 +81,14 @@ Run `npm test` for the headless checks.
 
 ## Balance report
 
-`npm run balance` (about a minute; add `-- --quick` for ~15s, or `-- --json out.json` to save the numbers) prints:
+`npm run balance` (about 3 minutes; add `-- --quick` for ~40s, or `-- --json out.json` to save the numbers) prints:
 
 1. **Unit strength:** random fights between teams with matching costs and traits off. Each unit's win rate against other units of its cost, where 50% is average.
 2. **Trait value:** a team fights an identical copy with one trait switched off. "Worth" is the extra HP and attack damage the copy needs to break even, so tiers can be compared directly.
-3. **Cost curve:** how much stronger each cost and star level is than the one below, measured the same way.
-4. **Bot games:** pick rate and average placement of traits and units on final boards. This depends on how the bots build, so use it as a sanity check.
+3. **Cost curve:** how much stronger each cost and star level is than the one below, measured the same way. Also tests the Mythic on real bot boards at rounds 9, 15 and 21 against target win rates.
+4. **Augments:** what each combat augment and crest is worth, measured like traits.
+5. **Terrain:** what one terrain hex under one unit is worth, compared with a typical augment.
+6. **Arena rules:** fight pace, draw rate and trait value shifts under each combat rule.
+7. **Bot games:** pick rate and average placement of traits, units and augments on final boards, plus game length per arena rule. This depends on how the bots build, so use it as a sanity check.
 
 Outliers are listed under **FLAGS** at the end. Re-run it after changing numbers in `js/data.js` to see the effect.

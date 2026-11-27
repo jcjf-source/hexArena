@@ -4,7 +4,7 @@
 
 import { TRAITS } from './data.js';
 
-export const AUGMENT_ROUNDS = [3, 10, 17];
+export const AUGMENT_ROUNDS = [3, 10, 17, 24];
 export const AUGMENT_EXTRA_TIME = 10; // extra planning seconds on augment rounds
 export const CHOICES = 3;
 

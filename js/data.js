@@ -36,7 +36,7 @@ export function mythicScale(round, level) {
 }
 
 // XP needed to go from level N to N+1 (index = current level).
-export const XP_TO_LEVEL = [0, 2, 2, 6, 10, 20, 36, 56, 80];
+export const XP_TO_LEVEL = [0, 2, 2, 6, 10, 20, 32, 48, 68]; // totals: L7 72, L8 120, L9 188
 export const MAX_LEVEL = 9;
 
 export const STAR_MULT = [1, 1.8, 3.24];

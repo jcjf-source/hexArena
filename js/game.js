@@ -661,13 +661,15 @@ export class Game {
     if (!this.aliveHumans().length) this.finishCombat();
   }
 
+  // Base HP lost on a defeat, by stage. Tuned with survivorDamage so games last ~30 rounds
+  // and most players see level 8 before the end (was ~25 rounds, ending as level 8 arrived).
   stageDamage() {
     const r = this.round;
-    if (r <= 6) return 2;
-    if (r <= 12) return 4;
-    if (r <= 18) return 6;
-    if (r <= 24) return 9;
-    return 12;
+    if (r <= 6) return 1;
+    if (r <= 12) return 2;
+    if (r <= 18) return 4;
+    if (r <= 24) return 6;
+    return 9;
   }
 
   // Applies a lost fight's damage to a player; returns the damage actually taken.
@@ -680,7 +682,7 @@ export class Game {
   }
 
   survivorDamage(combat, side) {
-    return combat.survivors(side).reduce((s, u) => s + u.star, 0);
+    return Math.round(0.75 * combat.survivors(side).reduce((s, u) => s + u.star, 0)); // 3/4 HP per surviving enemy star
   }
 
   pveLoot(p) {
