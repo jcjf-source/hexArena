@@ -6,7 +6,8 @@
 //
 // Sections:
 //   1. Unit strength: random mirrored-cost team fights with traits off. Each unit's
-//      win rate shows its raw power against other units of the same cost (50% = average).
+//      win rate shows its raw power against other units of the same cost (50% = average),
+//      first with 1★/2★ units, then with everyone at 3★ (where ability numbers jump most).
 //   2. Trait value: the same team fights itself with one trait switched off on one side.
 //      The win rate of the side with the trait shows what each tier is worth.
 //   3. Cost curve: do pricier / higher-star units beat cheaper ones by a sensible margin?
@@ -31,6 +32,7 @@ const quick = args.includes('--quick');
 const jsonOut = args.includes('--json') ? args[args.indexOf('--json') + 1] : null;
 const N = {
   unitFights: quick ? 6000 : 40000,
+  unit3Fights: quick ? 3000 : 15000,
   traitFights: quick ? 120 : 400,
   costFights: quick ? 120 : 400,
   ruleFights: quick ? 300 : 1500,
@@ -149,14 +151,16 @@ function traitSample(t, tier, mods = null) {
 }
 
 // ------------------------------------------------------------ 1. unit strength
-function unitStrength() {
+// three: every unit at 3★ instead of a 1★/2★ mix. Mythics are left out (unique, never starred).
+function unitStrength(three = false) {
   const t0 = Date.now();
+  const fights = three ? N.unit3Fights : N.unitFights;
   const SLOTS = 6;
   const costWeights = [1, 1, 2, 2, 3, 3, 4, 5]; // slot costs, mirrored on both sides
   const stat = Object.fromEntries(KEYS.map((k) => [k, { n: 0, w: 0 }]));
-  for (let f = 0; f < N.unitFights; f++) {
+  for (let f = 0; f < fights; f++) {
     const costs = Array.from({ length: SLOTS }, () => costWeights[rnd(costWeights.length)]);
-    const stars = costs.map(() => (Math.random() < 0.5 ? 1 : 2));
+    const stars = costs.map(() => (three ? 3 : Math.random() < 0.5 ? 1 : 2));
     const make = () => costs.map((c, i) => ({ key: byCost[c][rnd(byCost[c].length)], star: stars[i] }));
     const X = make();
     const Y = make();
@@ -168,18 +172,26 @@ function unitStrength() {
       stat[Y[i].key].n++; stat[Y[i].key].w += 1 - r.win;
     });
   }
-  console.log(`\n1. UNIT STRENGTH  (traits off, ${N.unitFights} fights, ${elapsed(t0)})`);
-  console.log('   Win rate when the unit replaces a same-cost unit. 50% = average for its cost.\n');
+  if (three) {
+    console.log(`\n1b. 3★ UNIT STRENGTH  (everyone 3★, traits off, ${fights} fights, ${elapsed(t0)})`);
+    console.log('   Same test with every unit at 3★. 3★ ability numbers jump a lot, so this finds units whose');
+    console.log('   3★ is out of line with their cost. 50% = average 3★ for its cost.\n');
+  } else {
+    console.log(`\n1. UNIT STRENGTH  (traits off, ${fights} fights, ${elapsed(t0)})`);
+    console.log('   Win rate when the unit replaces a same-cost unit. 50% = average for its cost.\n');
+  }
+  const tag = three ? ' 3★' : '';
   for (const c of [1, 2, 3, 4, 5]) {
     console.log(`   ${c}-cost`);
     const rows = byCost[c].map((k) => ({ k, p: stat[k].w / stat[k].n, n: stat[k].n })).sort((a, b) => b.p - a.p);
     for (const { k, p, n } of rows) {
       const e = ci(p, n);
       let flag = '';
-      if (p - e > 0.56) { flag = '◀ strong'; flags.push(`Unit ${UNITS[k].name} (${c}-cost) is strong: ${pct(p)} vs same-cost units`); }
-      if (p + e < 0.44) { flag = '◀ weak'; flags.push(`Unit ${UNITS[k].name} (${c}-cost) is weak: ${pct(p)} vs same-cost units`); }
+      if (p - e > 0.56) { flag = '◀ strong'; flags.push(`Unit ${UNITS[k].name}${tag} (${c}-cost) is strong: ${pct(p)} vs same-cost${tag} units`); }
+      if (p + e < 0.44) { flag = '◀ weak'; flags.push(`Unit ${UNITS[k].name}${tag} (${c}-cost) is weak: ${pct(p)} vs same-cost${tag} units`); }
       console.log(`     ${UNITS[k].name.padEnd(14)} ${pct(p).padStart(6)} ±${(100 * e).toFixed(1).padStart(4)}  ${bar(p)} ${flag}`);
-      out.units[k] = { cost: c, winRate: p, n };
+      if (three) (out.units[k] ||= { cost: c }).winRate3 = p;
+      else out.units[k] = { ...(out.units[k] || {}), cost: c, winRate: p, n };
     }
   }
 }
@@ -243,12 +255,21 @@ function costCurve() {
   console.log(`\n3. COST CURVE  (power equivalent, 5 v 5, traits off, ${N.costFights} fights each)`);
   console.log('   How much stronger the LEFT team is, as the stat boost the right team needs to break even.');
   console.log('   Each cost step should be a clear upgrade (roughly +25% to +60%). A 2★ copy is meant to be');
-  console.log('   at least as good as a 1★ one cost up, so its row should be at or above +0%.\n');
+  console.log('   at least as good as a 1★ one cost up, so its row should be at or above +0%. A 3★ takes 9');
+  console.log('   copies, so it should beat a 2★ of one cost up and clearly beat its own 2★.\n');
   const team = (cost, star) => place(pickN(byCost[cost], 5).map((key) => ({ key, star })));
   const tests = [];
   for (let c = 1; c <= 4; c++) {
     tests.push({ label: `${c + 1}-cost 1★ vs ${c}-cost 1★`, a: [c + 1, 1], b: [c, 1], lo: 1.15, hi: 1.8 });
     tests.push({ label: `${c}-cost 2★ vs ${c + 1}-cost 1★`, a: [c, 2], b: [c + 1, 1], lo: 0.95, hi: 2.6 });
+  }
+  // 3★: stats are 1.8x a 2★ and 3★ ability numbers jump further. 4- and 5-cost 3★ are meant
+  // to be near game-winning (9 of only 12 or 10 copies), so their ceiling is higher.
+  for (let c = 1; c <= 5; c++) {
+    tests.push({ label: `${c}-cost 3★ vs ${c}-cost 2★`, a: [c, 3], b: [c, 2], lo: 1.6, hi: c <= 3 ? 3.5 : 7 });
+  }
+  for (let c = 1; c <= 4; c++) {
+    tests.push({ label: `${c}-cost 3★ vs ${c + 1}-cost 2★`, a: [c, 3], b: [c + 1, 2], lo: 1.0, hi: 2.6 });
   }
   for (const tst of tests) {
     const r = powerRatio(() => ({ X: team(...tst.a), Y: team(...tst.b), tiersX: NO_TRAITS, tiersY: NO_TRAITS }), N.costFights);
@@ -465,19 +486,26 @@ function botGames() {
   const augStat = Object.fromEntries(Object.keys(AUGMENTS).map((k) => [k, { n: 0, place: 0, top4: 0 }]));
   const ruleStat = {};
   let boards = 0;
+  const three = { finalBoards: 0, finalByCost: {}, gamesByCost: {}, anyGames: 0 }; // 3★ sightings
   for (let g = 0; g < N.games; g++) {
     const game = new Game({ humans: [] });
     game.start();
     const lastTeam = {};
+    const seen3 = new Set(); // costs of 3★ units fielded at any point this game
     let guard = 0;
     while (game.phase !== 'gameover' && guard++ < 80) {
       game.startCombat(); // resolves instantly with no humans
       for (const m of game.matches) {
         lastTeam[m.a.id] = m.teamA;
         if (!m.pve && !m.ghost) lastTeam[m.b.id] = m.teamB;
+        for (const s of [...m.teamA, ...(m.pve ? [] : m.teamB)]) {
+          if (s.unit.star === 3) seen3.add(UNITS[s.unit.key].cost);
+        }
       }
       if (game.phase === 'results') game.nextRound();
     }
+    if (seen3.size) three.anyGames++;
+    for (const c of seen3) three.gamesByCost[c] = (three.gamesByCost[c] || 0) + 1;
     const winner = game.players.find((p) => p.placement === 1);
     const rs = (ruleStat[game.rule.id] ||= { games: 0, rounds: 0, level: 0, stars: 0 });
     rs.games++;
@@ -488,6 +516,9 @@ function botGames() {
       const team = (lastTeam[p.id] || []).map((s) => s.unit);
       const place = p.placement;
       boards++;
+      const t3 = team.filter((u) => u.star === 3);
+      if (t3.length) three.finalBoards++;
+      for (const u of t3) three.finalByCost[UNITS[u.key].cost] = (three.finalByCost[UNITS[u.key].cost] || 0) + 1;
       for (const id of p.augments) {
         const s = augStat[id];
         s.n++; s.place += place; s.top4 += place <= 4 ? 1 : 0;
@@ -525,6 +556,14 @@ function botGames() {
   const unplayed = KEYS.filter((k) => !unitStat[k].n);
   if (unplayed.length) console.log(`   never on a final board: ${unplayed.map((k) => UNITS[k].name).join(', ')}`);
 
+  console.log('\n   3★ units');
+  console.log(`     games where any 3★ was fielded: ${pct(three.anyGames / N.games)};  final boards with a 3★: ${pct(three.finalBoards / boards)}`);
+  console.log('     by cost   games with one fielded   on final boards (per 100 boards)');
+  for (const c of [1, 2, 3, 4, 5]) {
+    console.log(`     ${c}-cost    ${pct((three.gamesByCost[c] || 0) / N.games).padStart(18)}   ${(100 * (three.finalByCost[c] || 0) / boards).toFixed(1).padStart(25)}`);
+  }
+  out.games.threeStars = { anyGames: three.anyGames / N.games, finalBoards: three.finalBoards / boards, gamesByCost: three.gamesByCost, finalByCost: three.finalByCost };
+
   console.log('\n   Augment (bots\' picks)      picked   avg place   top 4');
   const arows = Object.keys(AUGMENTS).map((id) => ({ id, ...augStat[id] })).filter((r) => r.n >= 10)
     .map((r) => ({ ...r, avg: r.place / r.n, top4r: r.top4 / r.n })).sort((a, b) => a.avg - b.avg);
@@ -556,6 +595,7 @@ function botGames() {
 const start = Date.now();
 console.log(`Hex Arena balance report${quick ? ' (quick)' : ''}`);
 unitStrength();
+unitStrength(true);
 traitValue();
 costCurve();
 augmentValue();

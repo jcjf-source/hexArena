@@ -249,7 +249,8 @@ export class Game {
   }
 
   // ------------------------------------------------------------ shop & pool
-  pickFromPool(level) {
+  // skip: unit keys this player shouldn't be offered (see maxedKeys).
+  pickFromPool(level, skip = null) {
     const odds = SHOP_ODDS[level];
     let roll = Math.random() * 100;
     let cost = 1;
@@ -262,7 +263,8 @@ export class Game {
     const allowed = [1, 2, 3, 4, 5].filter((c) => odds[c - 1] > 0)
       .sort((a, b) => (Math.abs(a - cost) - Math.abs(b - cost)) || (a - b));
     for (const c of allowed) {
-      const keys = Object.keys(UNITS).filter((k) => UNITS[k].cost === c && !UNITS[k].mythic && this.pool[k] > 0);
+      const keys = Object.keys(UNITS).filter((k) => UNITS[k].cost === c && !UNITS[k].mythic && this.pool[k] > 0
+        && !(skip && skip.has(k)));
       const total = keys.reduce((s, k) => s + this.pool[k], 0);
       if (!total) continue;
       let r = Math.random() * total;
@@ -279,10 +281,29 @@ export class Game {
   // buy the last copy. Unbought cards go back when the shop is replaced.
   rollShop(p) {
     this.releaseShop(p);
+    const skip = this.maxedKeys(p);
     p.shop = Array.from({ length: this.shopSize(p) }, () => {
-      const key = this.pickFromPool(p.level);
+      const key = this.pickFromPool(p.level, skip);
       if (key) this.pool[key]--;
       return key;
+    });
+  }
+
+  // Units a player already has at 3★. They can't upgrade further, so that player's shop
+  // and loot stop offering them (other players still can).
+  maxedKeys(p) {
+    return new Set(allUnits(p).filter((l) => l.unit.star === 3).map((l) => l.unit.key));
+  }
+
+  // A unit just reached 3★: swap any copies of it still in this player's shop for fresh cards.
+  replaceMaxedCards(p, key) {
+    const skip = this.maxedKeys(p);
+    p.shop.forEach((k, i) => {
+      if (k !== key) return;
+      this.pool[k]++;
+      const next = this.pickFromPool(p.level, skip);
+      if (next) this.pool[next]--;
+      p.shop[i] = next;
     });
   }
 
@@ -313,6 +334,7 @@ export class Game {
 
   combine(p, key) {
     let upgraded = false;
+    let maxed = false;
     for (let star = 1; star <= 2; star++) {
       let copies = findCopies(p, key, star, !this.boardLocked);
       while (copies.length >= 3) {
@@ -321,9 +343,11 @@ export class Game {
         setAt(p, b.loc, null);
         setAt(p, keep.loc, makeInst(key, star + 1));
         upgraded = true;
+        if (star + 1 === 3) maxed = true;
         copies = findCopies(p, key, star, !this.boardLocked);
       }
     }
+    if (maxed) this.replaceMaxedCards(p, key);
     return upgraded;
   }
 
@@ -688,7 +712,9 @@ export class Game {
   pveLoot(p) {
     const r = this.round;
     const maxCost = r < 5 ? 1 : r < 12 ? 2 : r < 20 ? 3 : 4;
-    const keys = Object.keys(UNITS).filter((k) => UNITS[k].cost <= maxCost && UNITS[k].cost >= maxCost - 1 && this.pool[k] > 0);
+    const skip = this.maxedKeys(p);
+    const keys = Object.keys(UNITS).filter((k) => UNITS[k].cost <= maxCost && UNITS[k].cost >= maxCost - 1 && this.pool[k] > 0
+      && !skip.has(k));
     const slot = p.bench.indexOf(null);
     if (!keys.length || slot < 0) { p.gold += maxCost; return `+${maxCost} gold`; }
     const key = keys[rand(keys.length)];
@@ -858,12 +884,14 @@ export class Game {
       const d = UNITS[key];
       const copies = owned.filter((u) => u.key === key).length;
       const traitScore = d.traits.reduce((s, t) => s + (tc[t] || 0), 0);
-      const want = d.mythic || copies > 0 || owned.length < p.level + 2 || (traitScore >= 3 && owned.length < p.level + 5);
+      // From level 7, 4- and 5-cost units are worth picking up on sight (A/B: placement 4.24 vs 4.76).
+      const carry = !d.mythic && d.cost >= 4 && p.level >= 7;
+      const want = d.mythic || carry || copies > 0 || owned.length < p.level + 2 || (traitScore >= 3 && owned.length < p.level + 5);
       if (!want) continue;
       // From round 10, only buy a 1-cost if it completes a star-up right away, so bots don't
       // sit on the cheap pool once they've moved on to pricier units.
       if (d.cost === 1 && this.round >= 10 && findCopies(p, key, 1, true).length < 2) continue;
-      const floor = d.mythic ? 0 : copies > 0 ? reserve * 0.6 : reserve; // always grab a mythic
+      const floor = d.mythic ? 0 : copies > 0 || carry ? reserve * 0.6 : reserve; // always grab a mythic
       if (p.gold - d.cost < floor) continue;
       if (!this.canBuy(p, key)) {
         this.aiTrimBench(p, 1);
