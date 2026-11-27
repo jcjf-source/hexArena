@@ -8,10 +8,11 @@ export const MAX_TIME = 40; // seconds before a fight is declared a draw
 export const STEP = 1 / 30;
 const MOVE_TIME = 0.38; // seconds to move one hex
 // Terrain tuning (see terrain.js for the tile list).
-const SPRING_HEAL = 0.04; // fraction of max HP per second
-const WELL_MANA = 8; // mana per second
-const COVER_REDUCTION = 0.2;
-const BANNER_AS = 0.25;
+const SPRING_HEAL = 0.07; // fraction of max HP per second
+const WELL_MANA = 20; // mana per second
+const COVER_REDUCTION = 0.3;
+const BANNER_AS = 0.4;
+const HIGH_DMG = 0.2; // ranged units on high ground also deal this much more damage
 let NEXT_ID = 1;
 
 // Small seeded PRNG so every client can replay an identical fight from a seed.
@@ -311,7 +312,8 @@ export class Combat {
 
   damage(src, t, amount, kind, crit = false) {
     if (!t.alive) return;
-    const pre = amount * src.dmgAmp;
+    let pre = amount * src.dmgAmp;
+    if (this.terrain.size && src.range > 1 && this.tileOf(src) === 'high') pre *= 1 + HIGH_DMG;
     const resist = kind === 'phys' ? t.armor : t.mr;
     let dealt = pre * 100 / (100 + Math.max(0, resist));
     if (this.terrain.size && this.tileOf(t) === 'cover') dealt *= 1 - COVER_REDUCTION;
