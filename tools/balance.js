@@ -11,15 +11,20 @@
 //      The win rate of the side with the trait shows what each tier is worth.
 //   3. Cost curve: do pricier / higher-star units beat cheaper ones by a sensible margin?
 //   4. Augments: what each combat augment and crest is worth, measured like traits.
-//   5. Full bot games: pick rate and average placement of traits, units and augments.
-//      This reflects how the bots play, so treat it as a sanity check, not the main signal.
+//   5. Terrain: what one terrain hex under a unit is worth, measured like augments.
+//   6. Arena rules: how each combat rule changes fight pace, draws and trait values.
+//   7. Full bot games: pick rate and average placement of traits, units and augments, plus
+//      game length and winning boards per arena rule. This reflects how the bots play,
+//      so treat it as a sanity check, not the main signal.
 
 import fs from 'node:fs';
 import { UNITS, TRAITS } from '../js/data.js';
 import { Combat, activeTiers } from '../js/combat.js';
 import { Game } from '../js/game.js';
 import { AUGMENTS, traitBonus } from '../js/augments.js';
-import { ruleTraitBonus } from '../js/rules.js';
+import { RULES, ruleTraitBonus } from '../js/rules.js';
+import { TERRAIN } from '../js/terrain.js';
+import { COLS, cellKey } from '../js/hex.js';
 
 const args = process.argv.slice(2);
 const quick = args.includes('--quick');
@@ -28,6 +33,7 @@ const N = {
   unitFights: quick ? 6000 : 40000,
   traitFights: quick ? 120 : 400,
   costFights: quick ? 120 : 400,
+  ruleFights: quick ? 300 : 1500,
   games: quick ? 100 : 1000,
 };
 
@@ -64,11 +70,14 @@ function place(units) {
 
 // Fights teamX vs teamY with random side assignment. Returns { win: 1 | 0 | 0.5, margin }
 // where margin is X's remaining HP share minus Y's (-1..1).
-function fight(teamX, teamY, tiersX = null, tiersY = null, { seed, xIsA = Math.random() < 0.5, modsX = null, modsY = null } = {}) {
+// tilesX: terrain hexes ({ x, y, type } in board coords) on X's half only. The game always
+// mirrors terrain to both halves; one-sided tiles are how we measure what a tile is worth.
+function fight(teamX, teamY, tiersX = null, tiersY = null, { seed, xIsA = Math.random() < 0.5, modsX = null, modsY = null, tilesX = null } = {}) {
   const opt = (tA, tB, mA, mB) => ({ record: false, tiersA: tA, tiersB: tB, modsA: mA, modsB: mB, ...(seed !== undefined ? { seed } : {}) });
   const c = xIsA
     ? new Combat(teamX, teamY, opt(tiersX, tiersY, modsX, modsY))
     : new Combat(teamY, teamX, opt(tiersY, tiersX, modsY, modsX));
+  for (const t of tilesX || []) c.terrain.set(xIsA ? cellKey(t.x, 4 + t.y) : cellKey(COLS - 1 - t.x, 3 - t.y), t.type);
   c.runToEnd();
   const sideX = xIsA ? 'A' : 'B';
   const share = (side) => {
@@ -76,7 +85,7 @@ function fight(teamX, teamY, tiersX = null, tiersY = null, { seed, xIsA = Math.r
     return us.reduce((s, u) => s + Math.max(0, u.hp), 0) / us.reduce((s, u) => s + u.maxHp, 0);
   };
   const win = c.winner === 'draw' ? 0.5 : c.winner === sideX ? 1 : 0;
-  return { win, margin: share(sideX) - share(sideX === 'A' ? 'B' : 'A') };
+  return { win, margin: share(sideX) - share(sideX === 'A' ? 'B' : 'A'), time: c.time, draw: c.winner === 'draw' };
 }
 
 // Power equivalent: how much must team Y's HP and attack damage be multiplied by to
@@ -92,7 +101,7 @@ function powerRatio(makeSample, n) {
     let m = 0;
     let w = 0;
     for (const x of samples) {
-      const r = fight(x.X, scaled(x.Y, s), x.tiersX, x.tiersY, { seed: x.seed, xIsA: x.xIsA, modsX: x.modsX, modsY: x.modsY });
+      const r = fight(x.X, scaled(x.Y, s), x.tiersX, x.tiersY, { seed: x.seed, xIsA: x.xIsA, modsX: x.modsX, modsY: x.modsY, tilesX: x.tilesX });
       m += r.margin;
       w += r.win;
     }
@@ -110,8 +119,33 @@ function powerRatio(makeSample, n) {
 const boost = (r) => `${r >= 1 ? '+' : ''}${Math.round((r - 1) * 100)}%`;
 
 const NO_TRAITS = {};
-const out = { settings: N, units: {}, traits: {}, cost: [], games: {} };
+const out = { settings: N, units: {}, traits: {}, cost: [], games: {}, terrain: {}, rules: {} };
 const flags = [];
+const median = (xs) => { const s = xs.slice().sort((a, b) => a - b); return s[(s.length - 1) >> 1]; };
+let augMedian = null; // median combat augment worth, set by section 4
+
+// A random 7-unit team with a realistic cost spread.
+const TEAM_COSTS = [1, 2, 2, 3, 3, 4, 4, 5];
+const randomTeam = () => Array.from({ length: 7 }, () => {
+  const c = TEAM_COSTS[rnd(TEAM_COSTS.length)];
+  return { key: byCost[c][rnd(byCost[c].length)], star: Math.random() < 0.5 ? 1 : 2 };
+});
+
+// One trait-value sample: a team with exactly `tier` of trait t, vs itself with t switched off.
+function traitSample(t, tier, mods = null) {
+  const bp = TRAITS[t].breakpoints[tier];
+  const carriers = withTrait(t);
+  const others = KEYS.filter((k) => !UNITS[k].traits.includes(t));
+  const size = Math.max(6, bp);
+  const team = [...pickN(carriers, bp), ...pickN(others, size - bp)]
+    .map((key) => ({ key, star: Math.random() < 0.5 ? 1 : 2 }));
+  const placed = place(team);
+  const on = activeTiers(team);
+  on[t] = tier; // exactly this tier, even if fillers would push it higher
+  const off = { ...on };
+  delete off[t];
+  return { X: placed, Y: placed, tiersX: on, tiersY: off, modsX: mods, modsY: mods };
+}
 
 // ------------------------------------------------------------ 1. unit strength
 function unitStrength() {
@@ -157,21 +191,9 @@ function traitValue() {
   console.log('   extra HP and attack damage the trait-less side needs to break even. Win% is at no boost.\n');
   const rows = [];
   for (const t of Object.keys(TRAITS)) {
-    const carriers = withTrait(t);
-    const others = KEYS.filter((k) => !UNITS[k].traits.includes(t));
     TRAITS[t].breakpoints.forEach((bp, tier) => {
-      if (bp > carriers.length) return;
-      const r = powerRatio(() => {
-        const size = Math.max(6, bp);
-        const team = [...pickN(carriers, bp), ...pickN(others, size - bp)]
-          .map((key) => ({ key, star: Math.random() < 0.5 ? 1 : 2 }));
-        const placed = place(team);
-        const on = activeTiers(team);
-        on[t] = tier; // exactly this tier, even if fillers would push it higher
-        const off = { ...on };
-        delete off[t];
-        return { X: placed, Y: placed, tiersX: on, tiersY: off };
-      }, N.traitFights);
+      if (bp > withTrait(t).length) return;
+      const r = powerRatio(() => traitSample(t, tier), N.traitFights);
       rows.push({ t, bp, ...r });
     });
   }
@@ -245,11 +267,6 @@ function costCurve() {
 function augmentValue() {
   const t0 = Date.now();
   console.log(`\n4. AUGMENTS  (power equivalent, ${N.traitFights} mirror fights each)\n`);
-  const costWeights = [1, 2, 2, 3, 3, 4, 4, 5];
-  const randomTeam = () => Array.from({ length: 7 }, () => {
-    const c = costWeights[rnd(costWeights.length)];
-    return { key: byCost[c][rnd(byCost[c].length)], star: Math.random() < 0.5 ? 1 : 2 };
-  });
   const rows = [];
   for (const id of Object.keys(AUGMENTS).filter((k) => AUGMENTS[k].kind === 'combat')) {
     const mods = AUGMENTS[id].mods;
@@ -261,8 +278,8 @@ function augmentValue() {
     }, N.traitFights);
     rows.push({ id, ...r });
   }
-  const median = (xs) => { const s = xs.slice().sort((a, b) => a - b); return s[(s.length - 1) >> 1]; };
   const med = median(rows.map((r) => r.ratio - 1));
+  augMedian = med;
   console.log('   Combat augments');
   for (const r of rows.sort((a, b) => b.ratio - a.ratio)) {
     const v = r.ratio - 1;
@@ -298,12 +315,96 @@ function augmentValue() {
   console.log(`   (${elapsed(t0)})`);
 }
 
-// ------------------------------------------------------------ 5. full bot games
+// ------------------------------------------------------------ 5. terrain
+// A random team with one tile under one of its units (a ranged unit for High Ground,
+// which only helps them) vs the same team with no tile. Units can walk off the tile,
+// as they do in real fights, so front-line tiles are worth less than back-line ones.
+function terrainValue() {
+  const t0 = Date.now();
+  console.log(`\n5. TERRAIN  (power equivalent, one tile under one unit, ${N.traitFights} mirror fights each)`);
+  console.log('   Compare with the median combat augment, which buffs the whole team every fight.\n');
+  const rows = [];
+  for (const type of Object.keys(TERRAIN)) {
+    const r = powerRatio(() => {
+      const team = randomTeam();
+      const placed = place(team);
+      const tiers = activeTiers(team);
+      const fits = type === 'high' ? placed.filter((p) => UNITS[p.unit.key].range > 1) : placed;
+      const pool = fits.length ? fits : placed;
+      const host = pool[rnd(pool.length)];
+      return { X: placed, Y: placed, tiersX: tiers, tiersY: tiers, tilesX: [{ x: host.x, y: host.y, type }] };
+    }, N.traitFights);
+    rows.push({ type, ...r });
+  }
+  const med = median(rows.map((r) => r.ratio - 1));
+  for (const r of rows.sort((a, b) => b.ratio - a.ratio)) {
+    const d = TERRAIN[r.type];
+    const v = r.ratio - 1;
+    let flag = '';
+    if (v < 0.01) { flag = '◀ barely matters'; flags.push(`Terrain ${d.name} is worth only ${boost(r.ratio)}`); }
+    else if (v > med * 2 && v > med + 0.04) { flag = '◀ strong'; flags.push(`Terrain ${d.name} is worth ${boost(r.ratio)}; median tile is ${boost(1 + med)}`); }
+    if (augMedian !== null && v > augMedian) { flag += ' ◀ beats an augment'; flags.push(`Terrain ${d.name} (${boost(r.ratio)}) is worth more than a median combat augment (${boost(1 + augMedian)})`); }
+    console.log(`   ${(d.icon + ' ' + d.name).padEnd(18)} ${boost(r.ratio).padStart(5)}   win ${pct(r.win).padStart(6)}  ${flag}`);
+    out.terrain[r.type] = { worth: v, winRate: r.win };
+  }
+  console.log(`   median tile ${boost(1 + med)}${augMedian !== null ? `, median combat augment ${boost(1 + augMedian)}` : ''}   (${elapsed(t0)})`);
+}
+
+// ------------------------------------------------------------ 6. arena rules
+// Combat rules apply to everyone, so the question isn't "how strong" but "what changes":
+// fight pace, draws (fights that hit the time limit), and which traits gain or lose value.
+function ruleValue() {
+  const t0 = Date.now();
+  const combatRules = Object.keys(RULES).filter((id) => RULES[id].mods);
+  const traits = Object.keys(TRAITS);
+  console.log(`\n6. ARENA RULES  (${N.ruleFights} random fights for pace, ${N.traitFights} mirror fights per trait)`);
+  console.log('   Pace: random 7-unit teams with traits on, rule applied to both sides.');
+  console.log("   Trait columns: worth of each trait's first tier with no rule, then the change in points");
+  console.log('   under each rule (* = a big shift). Economy and terrain rules are covered in section 7.\n');
+  const pace = (mods) => {
+    let time = 0;
+    let draws = 0;
+    for (let i = 0; i < N.ruleFights; i++) {
+      const X = randomTeam();
+      const Y = randomTeam();
+      const r = fight(place(X), place(Y), activeTiers(X), activeTiers(Y), { modsX: mods, modsY: mods });
+      time += r.time;
+      draws += r.draw ? 1 : 0;
+    }
+    return { time: time / N.ruleFights, draws: draws / N.ruleFights };
+  };
+  const worths = (mods) => Object.fromEntries(traits.map((t) => [t, powerRatio(() => traitSample(t, 0, mods), N.traitFights).ratio - 1]));
+  const base = { ...pace(null), worth: worths(null) };
+  const head = traits.map((t) => TRAITS[t].name.slice(0, 6).padStart(7)).join('');
+  console.log(`   ${'Rule'.padEnd(18)} fight   draws ${head}`);
+  console.log(`   ${'(no rule)'.padEnd(18)} ${base.time.toFixed(1).padStart(4)}s ${pct(base.draws).padStart(6)} ${traits.map((t) => boost(1 + base.worth[t]).padStart(7)).join('')}`);
+  out.rules.none = base;
+  for (const id of combatRules) {
+    const mods = RULES[id].mods;
+    const r = { ...pace(mods), worth: worths(mods) };
+    const cells = traits.map((t) => {
+      const b = base.worth[t];
+      const d = r.worth[t] - b;
+      const big = Math.abs(d) >= 0.08 && Math.abs(d) >= Math.abs(b) * 0.5;
+      if (big) flags.push(`Rule ${RULES[id].name} moves ${TRAITS[t].name} (${TRAITS[t].breakpoints[0]}) from ${boost(1 + b)} to ${boost(1 + r.worth[t])}`);
+      return `${d >= 0 ? '+' : ''}${Math.round(d * 100)}${big ? '*' : ' '}`.padStart(7);
+    }).join('');
+    let flag = '';
+    if (r.draws > Math.max(0.1, base.draws * 3)) { flag = '◀ many draws'; flags.push(`Rule ${RULES[id].name}: ${pct(r.draws)} of fights hit the time limit (no rule: ${pct(base.draws)})`); }
+    console.log(`   ${(RULES[id].icon + ' ' + RULES[id].name).padEnd(18)} ${r.time.toFixed(1).padStart(4)}s ${pct(r.draws).padStart(6)} ${cells}  ${flag}`);
+    out.rules[id] = r;
+  }
+  console.log('   Ascendant acts like a free crest for everyone (section 4) with +20% instead of +15%.');
+  console.log(`   (${elapsed(t0)})`);
+}
+
+// ------------------------------------------------------------ 7. full bot games
 function botGames() {
   const t0 = Date.now();
   const traitStat = {};
   const unitStat = Object.fromEntries(KEYS.map((k) => [k, { n: 0, place: 0, top4: 0 }]));
   const augStat = Object.fromEntries(Object.keys(AUGMENTS).map((k) => [k, { n: 0, place: 0, top4: 0 }]));
+  const ruleStat = {};
   let boards = 0;
   for (let g = 0; g < N.games; g++) {
     const game = new Game({ humans: [] });
@@ -318,6 +419,12 @@ function botGames() {
       }
       if (game.phase === 'results') game.nextRound();
     }
+    const winner = game.players.find((p) => p.placement === 1);
+    const rs = (ruleStat[game.rule.id] ||= { games: 0, rounds: 0, level: 0, stars: 0 });
+    rs.games++;
+    rs.rounds += game.round;
+    rs.level += winner.level;
+    rs.stars += (lastTeam[winner.id] || []).reduce((s, u) => s + u.unit.star, 0);
     for (const p of game.players) {
       const team = (lastTeam[p.id] || []).map((s) => s.unit);
       const place = p.placement;
@@ -337,7 +444,7 @@ function botGames() {
       }
     }
   }
-  console.log(`\n5. FULL BOT GAMES  (${N.games} games, final board of each player, ${elapsed(t0)})`);
+  console.log(`\n7. FULL BOT GAMES  (${N.games} games, final board of each player, ${elapsed(t0)})`);
   console.log('   Avg placement: 1 = best, 8 = worst, 4.5 = average. Biased by how the bots build and by');
   console.log('   expensive units only appearing on boards that survived long, so use it as a sanity check.\n');
   console.log('   Trait (tier)        played   avg place   top 4');
@@ -369,6 +476,22 @@ function botGames() {
   }
   console.log('   (Picked early or late changes what an augment is worth, and bots favour crests and');
   console.log('    combat augments, so economy augments get fewer, more random picks.)');
+
+  console.log('\n   Arena rule (random per game)   games   rounds   winner level   winner stars');
+  const all = Object.values(ruleStat).reduce((a, s) => ({ games: a.games + s.games, rounds: a.rounds + s.rounds }), { games: 0, rounds: 0 });
+  const avgRounds = all.rounds / all.games;
+  const rrows = Object.entries(ruleStat).map(([id, s]) => ({ id, ...s })).sort((a, b) => (a.rounds / a.games) - (b.rounds / b.games));
+  for (const r of rrows) {
+    const rounds = r.rounds / r.games;
+    let flag = '';
+    if (r.games >= 30 && Math.abs(rounds - avgRounds) > avgRounds * 0.15) {
+      flag = rounds < avgRounds ? '◀ short games' : '◀ long games';
+      flags.push(`Rule ${RULES[r.id].name}: games last ${rounds.toFixed(1)} rounds on average (all rules: ${avgRounds.toFixed(1)})`);
+    }
+    console.log(`   ${(RULES[r.id].icon + ' ' + RULES[r.id].name).padEnd(30)} ${String(r.games).padStart(5)}   ${rounds.toFixed(1).padStart(6)}   ${(r.level / r.games).toFixed(1).padStart(12)}   ${(r.stars / r.games).toFixed(1).padStart(12)}  ${flag}`);
+    out.games[`rule:${r.id}`] = { games: r.games, avgRounds: rounds, winnerLevel: r.level / r.games, winnerStars: r.stars / r.games };
+  }
+  console.log(`   all rules: ${avgRounds.toFixed(1)} rounds${quick ? '. Few games per rule in --quick, so these are rough.' : ''}`);
 }
 
 const start = Date.now();
@@ -377,6 +500,8 @@ unitStrength();
 traitValue();
 costCurve();
 augmentValue();
+terrainValue();
+ruleValue();
 botGames();
 
 console.log(`\nFLAGS (${flags.length})`);
