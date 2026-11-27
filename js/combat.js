@@ -97,7 +97,7 @@ function makeUnit(u, side, col, row, tiers, rng) {
   if (has('tide')) cu.mana += val('tide');
   if (has('grove')) cu.regen = val('grove') / 100;
   if (has('storm')) cu.as *= 1 + val('storm') / 100;
-  if (has('void')) { cu.crit += val('void') / 100; cu.critDmg = 2; }
+  if (has('void')) { cu.crit += val('void') / 100; cu.critDmg = tiers.void >= 1 ? 2.25 : 2; cu.spellCrit = true; }
   if (has('guardian')) cu.armor += val('guardian');
   if (has('striker')) cu.ad *= 1 + val('striker') / 100;
   if (has('ranger')) cu.doubleChance = val('ranger') / 100;
@@ -352,6 +352,12 @@ export class Combat {
     for (const e of this.enemiesOf(u)) if (dist(u, e) <= p.radius) this.damage(u, e, p.dmg * u.ap / 100, 'magic');
   }
 
+  // Ability damage. Void units' spells can crit like their attacks.
+  spell(u, t, amount, kind) {
+    const crit = !!u.spellCrit && this.rng() < u.crit;
+    this.damage(u, t, crit ? amount * u.critDmg : amount, kind, crit);
+  }
+
   heal(u, amount) {
     if (!u || !u.alive) return;
     const real = Math.min(amount, u.maxHp - u.hp);
@@ -385,21 +391,21 @@ export class Combat {
       case 'nuke':
         if (!t) break;
         this.emit({ type: 'beam', from: u.id, to: t.id, kind });
-        this.damage(u, t, V(ab.dmg) * ap, kind);
+        this.spell(u, t, V(ab.dmg) * ap, kind);
         if (ab.stun) this.stunUnit(t, V(ab.stun));
         break;
       case 'snipe': {
         const tg = minBy(enemies, (e) => e.hp);
         if (!tg) break;
         this.emit({ type: 'beam', from: u.id, to: tg.id, kind });
-        this.damage(u, tg, V(ab.dmg) * ap, kind);
+        this.spell(u, tg, V(ab.dmg) * ap, kind);
         break;
       }
       case 'multishot': {
         enemies.sort((a, b) => dist(u, a) - dist(u, b));
         for (const e of enemies.slice(0, V(ab.count))) {
           this.emit({ type: 'beam', from: u.id, to: e.id, kind });
-          this.damage(u, e, V(ab.dmg) * ap, kind);
+          this.spell(u, e, V(ab.dmg) * ap, kind);
         }
         break;
       }
@@ -411,7 +417,7 @@ export class Combat {
         this.emit({ type: 'aoe', col: u.col, row: u.row, radius: ab.radius, kind });
         for (const e of enemies) {
           if (dist(u, e) <= ab.radius) {
-            this.damage(u, e, V(ab.dmg) * ap, kind);
+            this.spell(u, e, V(ab.dmg) * ap, kind);
             if (ab.stun) this.stunUnit(e, V(ab.stun));
           }
         }
@@ -423,7 +429,7 @@ export class Combat {
         this.emit({ type: 'aoe', col: c.col, row: c.row, radius: ab.radius, kind });
         for (const e of enemies) {
           if (dist(c, e) <= ab.radius) {
-            this.damage(u, e, V(ab.dmg) * ap, kind);
+            this.spell(u, e, V(ab.dmg) * ap, kind);
             if (ab.stun) this.stunUnit(e, V(ab.stun));
           }
         }
@@ -435,7 +441,7 @@ export class Combat {
         const hit = new Set();
         for (let i = 0; i < ab.bounces && cur; i++) {
           this.emit({ type: 'beam', from: prev.id, to: cur.id, kind: 'chain' });
-          this.damage(u, cur, V(ab.dmg) * ap, kind);
+          this.spell(u, cur, V(ab.dmg) * ap, kind);
           hit.add(cur);
           prev = cur;
           cur = minBy(this.enemiesOf(u).filter((e) => !hit.has(e)), (e) => dist(prev, e));
@@ -462,7 +468,7 @@ export class Combat {
           u.moving = false; u.moveT = 1;
           this.grid.set(cellKey(c, r), u);
         }
-        this.damage(u, tg, V(ab.dmg) * ap, kind);
+        this.spell(u, tg, V(ab.dmg) * ap, kind);
         u.target = tg;
         break;
       }

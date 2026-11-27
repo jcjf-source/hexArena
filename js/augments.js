@@ -36,7 +36,7 @@ export const AUGMENTS = {
 };
 
 // One crest per trait: +1 to the trait's count, and its units get a little stronger.
-export const CREST_BOOST = 15;
+export const CREST_BOOST = 10;
 for (const t of Object.keys(TRAITS)) {
   AUGMENTS[`crest_${t}`] = {
     kind: 'crest', crest: t, name: `${TRAITS[t].name} Crest`, icon: TRAITS[t].icon,

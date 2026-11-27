@@ -41,16 +41,16 @@ export const MAX_LEVEL = 9;
 export const STAR_MULT = [1, 1.8, 3.24];
 
 export const TRAITS = {
-  ember:    { name: 'Ember',    icon: '🔥', breakpoints: [2, 4],    values: [20, 45],      desc: 'Ember units deal +{v}% damage.' },
-  tide:     { name: 'Tide',     icon: '🌊', breakpoints: [2, 4],    values: [30, 60],      desc: 'Tide units start combat with +{v} mana.' },
-  grove:    { name: 'Grove',    icon: '🌿', breakpoints: [2, 4, 6], values: [2, 3, 5],     desc: 'Grove units regenerate {v}% of their max HP each second.' },
-  storm:    { name: 'Storm',    icon: '⚡', breakpoints: [3, 5],    values: [40, 90],      desc: 'Storm units gain +{v}% attack speed.' },
-  void:     { name: 'Void',     icon: '🌑', breakpoints: [3, 5],    values: [45, 100],      desc: 'Void units gain +{v}% critical strike chance, and their crits deal 200% damage.' },
-  guardian: { name: 'Guardian', icon: '🛡️', breakpoints: [2, 4, 6], values: [35, 80, 200], desc: 'Guardians gain +{v} armor.' },
-  striker:  { name: 'Striker',  icon: '⚔️', breakpoints: [2, 4],    values: [25, 60],      desc: 'Strikers gain +{v}% attack damage.' },
-  ranger:   { name: 'Ranger',   icon: '🏹', breakpoints: [2, 4],    values: [30, 65],      desc: 'Rangers have a {v}% chance to attack twice.' },
-  mystic:   { name: 'Mystic',   icon: '🔮', breakpoints: [3, 5],    values: [45, 100],     desc: 'All allies gain +{v} magic resist.' },
-  arcanist: { name: 'Arcanist', icon: '✨', breakpoints: [3, 5],    values: [35, 65],      desc: 'Arcanists gain +{v} ability power.' },
+  ember:    { name: 'Ember',    icon: '🔥', breakpoints: [2, 4],    values: [40, 70],      desc: 'Ember units deal +{v}% damage.' },
+  tide:     { name: 'Tide',     icon: '🌊', breakpoints: [2, 4],    values: [90, 130],      desc: 'Tide units start combat with +{v} mana.' },
+  grove:    { name: 'Grove',    icon: '🌿', breakpoints: [2, 4, 6], values: [4, 5, 6],     desc: 'Grove units regenerate {v}% of their max HP each second.' },
+  storm:    { name: 'Storm',    icon: '⚡', breakpoints: [3, 5],    values: [60, 110],      desc: 'Storm units gain +{v}% attack speed.' },
+  void:     { name: 'Void',     icon: '🌑', breakpoints: [3, 5],    values: [40, 65],      desc: 'Void units gain +{v}% critical strike chance, and their attacks and spells can crit for 200% damage (225% at 5).' },
+  guardian: { name: 'Guardian', icon: '🛡️', breakpoints: [2, 4, 6], values: [100, 170, 300], desc: 'Guardians gain +{v} armor.' },
+  striker:  { name: 'Striker',  icon: '⚔️', breakpoints: [2, 4],    values: [120, 160],      desc: 'Strikers gain +{v}% attack damage.' },
+  ranger:   { name: 'Ranger',   icon: '🏹', breakpoints: [2, 4],    values: [75, 100],      desc: 'Rangers have a {v}% chance to attack twice.' },
+  mystic:   { name: 'Mystic',   icon: '🔮', breakpoints: [3, 5],    values: [80, 150],     desc: 'All allies gain +{v} magic resist.' },
+  arcanist: { name: 'Arcanist', icon: '✨', breakpoints: [3, 5],    values: [45, 85],      desc: 'Arcanists gain +{v} ability power.' },
 };
 
 // Ability types: shield, nuke, snipe, multishot, frenzy, slam, aoe, chain, heal, teamheal, dash.
@@ -148,9 +148,9 @@ export const UNITS = {
   // Only one copy exists and it stays 1★, so its power is built in. Values are arrays like
   // other units' so the shared templates work, but only the first entry is ever used.
   phoenix: { name: 'Crimson Phoenix', icon: '🦅', cost: 10, mythic: true, traits: ['ember', 'arcanist'],
-    hp: 1200, ad: 70, as: 0.8, range: 3, armor: 45, mr: 45, mana: [30, 100],
-    ability: { name: 'Sunfire Cataclysm', type: 'aoe', radius: 2, dmg: [600, 600, 600], stun: [1, 1, 1], desc: 'Calls down the sun on its target, dealing {dmg} magic damage to enemies within 2 hexes and stunning them for {stun}s.' },
-    passive: { type: 'rebirth', name: 'Rebirth', hpPct: 50, dmg: 300, radius: 2, desc: 'The first time it dies in a fight, it is reborn with 50% HP and explodes, dealing {dmg} magic damage to enemies within 2 hexes.' } },
+    hp: 1320, ad: 77, as: 0.8, range: 3, armor: 45, mr: 45, mana: [30, 100],
+    ability: { name: 'Sunfire Cataclysm', type: 'aoe', radius: 2, dmg: [660, 660, 660], stun: [1, 1, 1], desc: 'Calls down the sun on its target, dealing {dmg} magic damage to enemies within 2 hexes and stunning them for {stun}s.' },
+    passive: { type: 'rebirth', name: 'Rebirth', hpPct: 50, dmg: 330, radius: 2, desc: 'The first time it dies in a fight, it is reborn with 50% HP and explodes, dealing {dmg} magic damage to enemies within 2 hexes.' } },
 };
 
 // Neutral monsters for PvE rounds.
